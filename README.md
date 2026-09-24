@@ -1,7 +1,7 @@
 # legio-cli
 
-The `legio` command. It prepares a Linux machine so the Legio iOS
-app can connect to it, and pairs phones with it.
+The `legio` command. It prepares a Linux machine or a Mac so the Legio
+iOS app can connect to it, and pairs phones with it.
 
 **The phone makes its own SSH key.** The QR code holds no key. The phone
 sends only its public key back, and you confirm a five-word key phrase on
@@ -29,7 +29,7 @@ Run it on the server, as the user the app logs in as:
 ./legio            # same as: legio setup
 ```
 
-`setup` does these steps:
+`setup` does these steps on Linux:
 
 1. Finds a proxy: `systemd-socket-proxyd` first, then socat. It installs
    socat only when systemd has no proxy.
@@ -40,15 +40,23 @@ Run it on the server, as the user the app logs in as:
    login, and the permissions on your home directory.
 5. Shows the pairing QR code and waits for the phone.
 
+On a Mac, steps 1 to 3 are different. `legio` has
+[`scripts/mac-setup.sh`](scripts/mac-setup.sh) built into its binary, and
+runs it in place of the systemd units. The script checks Remote Login,
+installs socat with Homebrew, and writes a `com.legio.bridge` LaunchAgent
+that keeps 127.0.0.1:4499 open to the socket. `--on-demand` lets launchd
+hold the port and start one socat for each connection. Steps 4 and 5 are
+the same as on Linux.
+
 | Command | What it does |
 | --- | --- |
 | `setup` | All of the steps above. `--no-pair` stops after step 4. |
-| `pair` | Step 5 only. Works on any machine with sshd, also a Mac. On a Mac, install the bridge with `legio/Scripts/mac-setup.sh` first. |
+| `pair` | Step 5 only. Works on any machine with sshd. |
 | `devices` | Lists the paired phones, each with its key phrase, and what each one may do. |
 | `unpair <name or key phrase>` | Removes one phone. `--all` removes all phones. |
 | `options` | Applies `--forward-port` or `--no-restrict` to the phones that are already paired. |
 | `check` | Reports on the bridge, Herdr, sshd and the paired phones. Changes nothing. |
-| `uninstall` | Removes the units and every phone key. |
+| `uninstall` | Removes the units (the LaunchAgent on a Mac) and every phone key. |
 
 Frequent options:
 
@@ -64,14 +72,17 @@ Frequent options:
 
 ## What it changes
 
-- `~/.config/systemd/user/herdr-bridge.{socket,service}`
+- `~/.config/systemd/user/herdr-bridge.{socket,service}` on Linux.
+- `~/Library/LaunchAgents/com.legio.bridge.plist` on a Mac, with its log
+  in `~/Library/Logs/com.legio.bridge.log`.
 - `~/.ssh/authorized_keys` — one line for each phone, with the comment
   `legio-app:<phone>`. The tool copies the file to
   `authorized_keys.herdr-backup-<time>` before each change, and replaces
   the file in one rename. It keeps lines that are not its own byte for
   byte. It never edits a line that holds two keys (what an append without
   a newline guard makes). It reports such a line.
-- Lingering for your user (`loginctl enable-linger`), through `sudo`.
+- Lingering for your user (`loginctl enable-linger`), through `sudo`, on
+  Linux.
 
 It never edits the system sshd configuration.
 

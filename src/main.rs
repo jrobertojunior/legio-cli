@@ -1,12 +1,13 @@
 //! `legio` — prepare a machine so the Legio iOS app can connect,
 //! and pair phones with it.
 //!
-//! It installs the bridge to Herdr's socket as systemd user units, checks
-//! the SSH server, and pairs phones. A phone makes its own key and sends
+//! It installs the bridge to Herdr's socket as systemd user units on Linux,
+//! or as a LaunchAgent on a Mac, checks the SSH server, and pairs phones. A phone makes its own key and sends
 //! only the public half. See `pairing.rs`.
 
 mod authorized_keys;
 mod bridge;
+mod mac;
 mod pairing;
 mod phrase;
 mod server;
@@ -138,6 +139,10 @@ struct SetupArgs {
     /// Use socat even when systemd has its own proxy.
     #[arg(long)]
     use_socat: bool,
+    /// On a Mac, let launchd hold the port and start one socat for each
+    /// connection, instead of one socat that always runs.
+    #[arg(long)]
+    on_demand: bool,
     /// Install the bridge and run the checks, but pair no phone.
     #[arg(long)]
     no_pair: bool,
@@ -174,18 +179,22 @@ fn setup(args: SetupArgs) -> anyhow::Result<()> {
     let herdr = &args.pair.herdr;
     let socket = socket_path(herdr)?;
 
-    bold("1. Choosing the proxy");
-    bridge::require_systemd()?;
-    let proxy = bridge::choose_proxy(args.use_socat)?;
-    bridge::report_herdr(&herdr.session);
+    if cfg!(target_os = "macos") {
+        mac::install(port, &socket, &herdr.session, args.on_demand)?;
+    } else {
+        bold("1. Choosing the proxy");
+        bridge::require_systemd()?;
+        let proxy = bridge::choose_proxy(args.use_socat)?;
+        bridge::report_herdr(&herdr.session);
 
-    bold("2. Checking the Herdr socket");
-    bridge::report_socket(&socket);
+        bold("2. Checking the Herdr socket");
+        bridge::report_socket(&socket);
 
-    bold("3. Installing the systemd user units");
-    bridge::ensure_linger(&user);
-    bridge::install_units(&home, &proxy, port, &socket)?;
-    bridge::probe_agent_kinds(port);
+        bold("3. Installing the systemd user units");
+        bridge::ensure_linger(&user);
+        bridge::install_units(&home, &proxy, port, &socket)?;
+        bridge::probe_agent_kinds(port);
+    }
 
     // Before the pairing, not after: a server that will refuse the key is
     // worth knowing about before the phone is in your hand.
@@ -202,10 +211,17 @@ fn setup(args: SetupArgs) -> anyhow::Result<()> {
 
     println!();
     bold("Done.");
-    info(&format!(
-        "Read the proxy log with: journalctl --user -u {} -f",
-        bridge::UNIT_NAME
-    ));
+    if cfg!(target_os = "macos") {
+        info(&format!(
+            "Read the proxy log with: cat {}",
+            mac::log_file(&home).display()
+        ));
+    } else {
+        info(&format!(
+            "Read the proxy log with: journalctl --user -u {} -f",
+            bridge::UNIT_NAME
+        ));
+    }
     info("Pair another phone with: legio pair");
     info("Remove everything with: legio uninstall");
     Ok(())
@@ -432,9 +448,13 @@ fn unpair(device: Option<&str>, all: bool) -> anyhow::Result<()> {
 fn check(target: &TargetArgs, herdr: &HerdrArgs) -> anyhow::Result<()> {
     let home = sys::home()?;
     bold("Bridge");
-    match bridge::installed_unit(&home) {
-        Some(unit) => bridge::report_unit(&unit, target.port),
-        None => warn("No bridge unit is installed. Run: legio setup"),
+    if cfg!(target_os = "macos") {
+        mac::report_agent(&home, target.port);
+    } else {
+        match bridge::installed_unit(&home) {
+            Some(unit) => bridge::report_unit(&unit, target.port),
+            None => warn("No bridge unit is installed. Run: legio setup"),
+        }
     }
     bold("Herdr");
     bridge::report_herdr(&herdr.session);
@@ -448,12 +468,16 @@ fn check(target: &TargetArgs, herdr: &HerdrArgs) -> anyhow::Result<()> {
 
 fn uninstall() -> anyhow::Result<()> {
     let home = sys::home()?;
-    bold(&format!("Removing the {} units", bridge::UNIT_NAME));
-    bridge::remove_units(&home);
-    info(&format!(
-        "Removed the units from {}.",
-        bridge::unit_dir(&home).display()
-    ));
+    if cfg!(target_os = "macos") {
+        mac::uninstall()?;
+    } else {
+        bold(&format!("Removing the {} units", bridge::UNIT_NAME));
+        bridge::remove_units(&home);
+        info(&format!(
+            "Removed the units from {}.",
+            bridge::unit_dir(&home).display()
+        ));
+    }
 
     bold("Removing the paired phones");
     let file = keys::File::in_home(&home);
@@ -469,8 +493,10 @@ fn uninstall() -> anyhow::Result<()> {
     ));
     warn_joined(&text);
 
-    let user = sys::user()?;
-    info("Lingering is left on. Turn it off with:");
-    info(&format!("  sudo loginctl disable-linger {user}"));
+    if !cfg!(target_os = "macos") {
+        let user = sys::user()?;
+        info("Lingering is left on. Turn it off with:");
+        info(&format!("  sudo loginctl disable-linger {user}"));
+    }
     Ok(())
 }
