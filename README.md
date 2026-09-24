@@ -1,7 +1,8 @@
-# herdr-setup
+# legio-cli
 
-Prepares a Linux machine so the HerdrPOC iOS app can connect to it, and
-pairs phones with it. It replaces `HerdrPOC/Scripts/vps-setup.sh`.
+The `legio` command. It prepares a Linux machine so the HerdrPOC iOS
+app can connect to it, and pairs phones with it. It replaces
+`HerdrPOC/Scripts/vps-setup.sh`.
 
 The main change from the script: **the phone makes its own SSH key.** The
 script made the key on the server and showed the private half in a QR
@@ -20,7 +21,7 @@ example with [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild):
 
 ```sh
 cargo zigbuild --release --target x86_64-unknown-linux-musl
-scp target/x86_64-unknown-linux-musl/release/herdr-setup server:
+scp target/x86_64-unknown-linux-musl/release/legio server:
 ```
 
 ## Use
@@ -28,7 +29,7 @@ scp target/x86_64-unknown-linux-musl/release/herdr-setup server:
 Run it on the server, as the user the app logs in as:
 
 ```sh
-./herdr-setup            # same as: herdr-setup setup
+./legio            # same as: legio setup
 ```
 
 `setup` does these steps:
@@ -79,7 +80,7 @@ It never edits the system sshd configuration.
 ## Moving from vps-setup.sh
 
 The key that the script made is at `~/.ssh/herdr-poc`. Its private half
-was shown as a QR code. After a phone pairs with `herdr-setup`, the tool
+was shown as a QR code. After a phone pairs with `legio`, the tool
 asks if it can remove that key. A phone that still uses the old key stops
 working when you remove it.
 

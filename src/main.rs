@@ -1,4 +1,4 @@
-//! `herdr-setup` — prepare a machine so the HerdrPOC iOS app can connect,
+//! `legio` — prepare a machine so the HerdrPOC iOS app can connect,
 //! and pair phones with it.
 //!
 //! The Rust successor of `Scripts/vps-setup.sh`. It does what the script
@@ -31,7 +31,7 @@ use crate::ui::{bold, info, warn};
 ///
 /// With no command, runs `setup`: the bridge, the checks, and one pairing.
 #[derive(Parser)]
-#[command(version, args_conflicts_with_subcommands = true)]
+#[command(name = "legio", version, args_conflicts_with_subcommands = true)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -214,8 +214,8 @@ fn setup(args: SetupArgs) -> anyhow::Result<()> {
         "Read the proxy log with: journalctl --user -u {} -f",
         bridge::UNIT_NAME
     ));
-    info("Pair another phone with: herdr-setup pair");
-    info("Remove everything with: herdr-setup uninstall");
+    info("Pair another phone with: legio pair");
+    info("Remove everything with: legio uninstall");
     Ok(())
 }
 
@@ -434,7 +434,7 @@ fn unpair(device: Option<&str>, all: bool, legacy: bool) -> anyhow::Result<()> {
         })
     });
     if removed == 0 {
-        anyhow::bail!("no paired phone matches. List them with: herdr-setup devices");
+        anyhow::bail!("no paired phone matches. List them with: legio devices");
     }
     file.write(&text)?;
     info(&format!(
@@ -493,7 +493,7 @@ fn offer_legacy_removal(home: &std::path::Path) -> anyhow::Result<()> {
     if ui::confirm("Remove it now?").unwrap_or(false) {
         remove_legacy_key(home)?;
     } else {
-        info("Remove it later with: herdr-setup unpair --legacy");
+        info("Remove it later with: legio unpair --legacy");
     }
     Ok(())
 }
@@ -503,7 +503,7 @@ fn check(target: &TargetArgs, herdr: &HerdrArgs) -> anyhow::Result<()> {
     bold("Bridge");
     match bridge::installed_unit(&home) {
         Some(unit) => bridge::report_unit(&unit, target.port),
-        None => warn("No bridge unit is installed. Run: herdr-setup setup"),
+        None => warn("No bridge unit is installed. Run: legio setup"),
     }
     bold("Herdr");
     bridge::report_herdr(&herdr.session);

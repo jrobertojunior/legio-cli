@@ -1,13 +1,13 @@
 # Pairing protocol, version 2
 
-How a phone pairs with a machine that runs `herdr-setup`. Version 1 was
+How a phone pairs with a machine that runs `legio`. Version 1 was
 `vps-setup.sh`: it made the key on the server and put the private half in
 the QR code. In version 2 the phone makes its key, and only the public half
 leaves the phone.
 
 ## 1. The QR code
 
-`herdr-setup` prints a QR code that holds one JSON object:
+`legio` prints a QR code that holds one JSON object:
 
 ```json
 {
@@ -98,7 +98,7 @@ The body is always JSON: `{"status": …, "message": …, "fingerprint": …}`.
 | 500 | `failed` | The server could not write the key. | Closed |
 | 404, 405 | `not_found`, `bad_request` | Wrong path or method. | Open |
 
-A closed listener spent the token. To pair again, run `herdr-setup pair` on
+A closed listener spent the token. To pair again, run `legio pair` on
 the server for a new code.
 
 ## 4. After pairing

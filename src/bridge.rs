@@ -43,7 +43,7 @@ pub fn unit_dir(home: &Path) -> PathBuf {
 pub fn require_systemd() -> anyhow::Result<()> {
     if !Path::new("/run/systemd/system").is_dir() || sys::which("systemctl").is_none() {
         bail!(
-            "systemd is not running. The bridge needs systemd (a Linux server). `herdr-setup pair` works without it"
+            "systemd is not running. The bridge needs systemd (a Linux server). `legio pair` works without it"
         );
     }
     Ok(())
