@@ -18,8 +18,6 @@ use crate::sys;
 use crate::ui::{info, warn};
 
 pub const UNIT_NAME: &str = "herdr-bridge";
-/// The unit an older version of the bash script installed.
-const LEGACY_UNIT: &str = "herdr-socat";
 
 pub enum Proxy {
     /// `systemd-socket-proxyd`, which ships with systemd: nothing to
@@ -107,14 +105,13 @@ pub fn ensure_linger(user: &str) {
     }
 }
 
-/// Stops and deletes every unit this tool or the bash script installed, so
-/// the two kinds never both listen on the port.
+/// Stops and deletes both kinds of unit, so a switch from one proxy to the
+/// other never leaves two listening on the port.
 pub fn remove_units(home: &Path) {
     let dir = unit_dir(home);
     for unit in [
         format!("{UNIT_NAME}.socket"),
         format!("{UNIT_NAME}.service"),
-        format!("{LEGACY_UNIT}.service"),
     ] {
         systemctl(&["disable", "--now", &unit]);
         let _ = fs::remove_file(dir.join(&unit));

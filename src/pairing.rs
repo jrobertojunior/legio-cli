@@ -1,16 +1,14 @@
 //! The pairing exchange: a QR code out to the phone, a public key back.
 //!
-//! The version-1 flow, in `vps-setup.sh`, made the key *here* and put the
-//! private half in the QR code. So the private key lived on the server,
-//! and on the screen, and in any photo of the screen. This flow turns that
-//! around: the phone makes its own key and only the public half ever
-//! leaves it.
+//! The phone makes its own key, and only the public half ever leaves it.
+//! A key made here and handed over in the QR code would live on the
+//! server, on the screen, and in any photo of the screen.
 //!
 //! 1. This tool prints a QR code with the connection details, the server's
 //!    host key fingerprint, a port, and a one-time token. Nothing in it is
 //!    a login.
 //! 2. The phone scans it, makes an ed25519 key, and POSTs the public key to
-//!    `http://<host>:<pairPort>/v2/pair`, with an HMAC of it keyed by the
+//!    `http://<host>:<pairPort>/v1/pair`, with an HMAC of it keyed by the
 //!    token.
 //! 3. This tool checks the HMAC, shows the key's fingerprint and the
 //!    phone's name, and asks the person at the terminal. Only a yes writes
@@ -36,8 +34,8 @@ use tiny_http::{Header, Method, Request, Response, Server};
 use crate::authorized_keys::device_slug;
 use crate::sshkey::PublicKey;
 
-pub const PAYLOAD_VERSION: u32 = 2;
-pub const PATH: &str = "/v2/pair";
+pub const PAYLOAD_VERSION: u32 = 1;
+pub const PATH: &str = "/v1/pair";
 /// A bad HMAC is either a bug in the app or someone guessing. Past this
 /// many, stop: the token has 256 bits and nobody guesses it, so a stream
 /// of bad ones is not a phone.
@@ -46,8 +44,8 @@ const MAX_BAD_ATTEMPTS: u32 = 5;
 /// bigger is not a pairing request.
 const MAX_BODY: u64 = 16 * 1024;
 
-/// What the QR code holds. Short field names, as in version 1: a longer
-/// payload is a denser code that a phone camera reads less well.
+/// What the QR code holds. Short field names, because a longer payload is
+/// a denser code that a phone camera reads less well.
 #[derive(Debug, Serialize)]
 pub struct Payload {
     pub v: u32,
@@ -88,7 +86,7 @@ pub struct PairRequest {
 /// can be swapped on the way. The prefix keeps this MAC from being valid
 /// for any other message a later version signs with the same token.
 pub fn mac_message(public_key: &str, device: &str) -> String {
-    format!("herdr-pair-v2\n{public_key}\n{device}")
+    format!("herdr-pair-v1\n{public_key}\n{device}")
 }
 
 /// What the app does. Here for the tests, which play the phone.
@@ -355,7 +353,7 @@ mod tests {
     use std::net::TcpStream;
 
     #[test]
-    fn options_match_the_bash_script() {
+    fn options_allow_a_pty_and_the_listed_forwards() {
         let forwards = Forwards::parse(&["3000".into(), "db.local:5432".into()]).unwrap();
         assert_eq!(
             key_options(4499, &forwards, false),

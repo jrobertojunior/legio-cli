@@ -68,9 +68,9 @@ pub fn home() -> anyhow::Result<PathBuf> {
         .context("HOME is not set")
 }
 
-/// The login the phone will use. `USER` first, because that is what the
-/// bash script used and what a person running this expects; `id -un` for
-/// the shells that do not set it.
+/// The login the phone will use. `USER` first, because that is what a
+/// person running this expects; `id -un` for the shells that do not set
+/// it.
 pub fn user() -> anyhow::Result<String> {
     std::env::var("USER")
         .ok()

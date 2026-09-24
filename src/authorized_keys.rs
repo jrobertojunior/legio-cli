@@ -1,8 +1,8 @@
 //! Reading and changing `~/.ssh/authorized_keys` without harming the keys
 //! that are not ours.
 //!
-//! Everything careful here exists because an earlier version of the bash
-//! setup script ate a working key. It appended with `>>` and no newline
+//! Everything careful here exists because an earlier setup script ate a
+//! working key. It appended with `>>` and no newline
 //! guard, so on a file whose last line had no newline the new key landed on
 //! the end of the old one and joined them into one unusable entry. The
 //! uninstall then matched its own key anywhere in the line and deleted the
@@ -13,7 +13,7 @@
 //! from that bug and is never touched. The old file is copied aside first,
 //! and the new one replaces it in one rename.
 //!
-//! Our entries are the ones whose comment starts with `herdr-app:`. The
+//! Our entries are the ones whose comment starts with `legio-app:`. The
 //! file itself is the list of paired phones — there is no second record to
 //! drift away from it.
 
@@ -28,7 +28,7 @@ use crate::sshkey::{self, PublicKey};
 
 /// What every comment this tool writes starts with. The phone's name
 /// follows it.
-pub const MARKER: &str = "herdr-app:";
+pub const MARKER: &str = "legio-app:";
 
 /// One phone's entry, as found in the file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,9 +65,8 @@ fn is_key_type(token: &str) -> bool {
 }
 
 /// A key type glued to the end of another word — `me@laptopssh-ed25519` —
-/// is how the old bug joined two entries that had no options. The bash
-/// script counted only tokens that *start* with a key type and missed
-/// this shape.
+/// is how that bug joined two entries that had no options. Counting only
+/// tokens that *start* with a key type misses this shape.
 fn holds_key_type(token: &str) -> bool {
     is_key_type(token)
         || [
@@ -385,7 +384,7 @@ mod tests {
         let lines: Vec<_> = text.lines().collect();
         assert_eq!(lines[0], OTHER);
         assert!(lines[1].starts_with("restrict,pty ssh-ed25519 "));
-        assert!(lines[1].ends_with(" herdr-app:iPhone"));
+        assert!(lines[1].ends_with(" legio-app:iPhone"));
         assert!(text.ends_with('\n'));
         assert!(replaced.is_empty());
     }
@@ -403,7 +402,7 @@ mod tests {
     #[test]
     fn options_with_quoted_spaces_stay_one_field() {
         let line = format!(
-            r#"command="echo a b",permitopen="127.0.0.1:1" {} herdr-app:x"#,
+            r#"command="echo a b",permitopen="127.0.0.1:1" {} legio-app:x"#,
             key(3).line()
         );
         let found = devices(&line);

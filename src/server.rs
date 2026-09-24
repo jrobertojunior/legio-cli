@@ -10,24 +10,47 @@ use crate::sys;
 use crate::ui::{info, warn};
 
 /// Which address goes in the QR code, and why.
+///
+/// Always a number, never a `.local` name: Citadel cannot resolve mDNS
+/// names, so a code that says `mac.local` pairs and then never connects.
 pub enum Address {
     Given(String),
     /// The best answer: the phone reaches it without port 22 open to the
     /// internet.
     Tailscale(String),
+    /// A Mac's Wi-Fi address. The phone must be on the same network.
+    Lan(String),
     Public(String),
     Unknown,
 }
+
+/// Where the Mac Tailscale app keeps its command line. The app does not
+/// put `tailscale` on the `PATH`, so a Mac on a tailnet would otherwise
+/// fall through to its Wi-Fi address.
+const MAC_TAILSCALE: &str = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
 
 impl Address {
     pub fn find(given: Option<&str>) -> Self {
         if let Some(host) = given {
             return Address::Given(host.into());
         }
+        let first_line = |o: String| o.lines().next().map(str::to_string);
         if let Some(ip) = sys::output("tailscale", &["ip", "-4"])
-            .and_then(|o| o.lines().next().map(str::to_string))
+            .or_else(|| sys::output(MAC_TAILSCALE, &["ip", "-4"]))
+            .and_then(first_line)
         {
             return Address::Tailscale(ip);
+        }
+        // A Mac is paired from the desk it sits on, so its Wi-Fi address is
+        // the one the phone can reach. A VPS's private address is not, so
+        // on Linux this step is skipped for the public IP.
+        if cfg!(target_os = "macos") {
+            let lan = ["en0", "en1", "en2"]
+                .iter()
+                .find_map(|interface| sys::output("ipconfig", &["getifaddr", interface]));
+            if let Some(ip) = lan {
+                return Address::Lan(ip);
+            }
         }
         // Through curl rather than an HTTP client here, so the tool carries
         // no TLS stack for one request.
@@ -42,17 +65,26 @@ impl Address {
 
     pub fn host(&self) -> &str {
         match self {
-            Address::Given(h) | Address::Tailscale(h) | Address::Public(h) => h,
+            Address::Given(h) | Address::Tailscale(h) | Address::Lan(h) | Address::Public(h) => h,
             Address::Unknown => "CHANGE-ME",
         }
     }
 
     pub fn report(&self) {
         match self {
-            Address::Given(h) => info(&format!("Using the host you gave: {h}")),
+            Address::Given(h) => {
+                info(&format!("Using the host you gave: {h}"));
+                if h.ends_with(".local") {
+                    warn("The app cannot resolve .local names. Give the IP address instead.");
+                }
+            }
             Address::Tailscale(h) => {
                 info(&format!("Using the Tailscale address: {h}"));
                 info("Keep port 22 closed to the internet. Run the Tailscale app on the phone.");
+            }
+            Address::Lan(h) => {
+                info(&format!("Using the Wi-Fi address: {h}"));
+                info("The phone must be on the same network.");
             }
             Address::Public(h) => {
                 info(&format!("Using the public IP: {h}"));

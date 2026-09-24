@@ -1,10 +1,9 @@
 //! `legio` — prepare a machine so the HerdrPOC iOS app can connect,
 //! and pair phones with it.
 //!
-//! The Rust successor of `Scripts/vps-setup.sh`. It does what the script
-//! did — the bridge to Herdr's socket, the systemd units, the checks — but
-//! pairs the other way round: the phone makes its own key and sends only
-//! the public half. See `pairing.rs`.
+//! It installs the bridge to Herdr's socket as systemd user units, checks
+//! the SSH server, and pairs phones. A phone makes its own key and sends
+//! only the public half. See `pairing.rs`.
 
 mod authorized_keys;
 mod bridge;
@@ -55,15 +54,11 @@ enum Command {
     /// Remove a paired phone's key.
     Unpair {
         /// The phone's name or its key fingerprint, as `devices` prints them.
-        #[arg(required_unless_present_any = ["all", "legacy"])]
+        #[arg(required_unless_present = "all")]
         device: Option<String>,
         /// Remove every paired phone.
         #[arg(long, conflicts_with = "device")]
         all: bool,
-        /// Remove the key the old vps-setup.sh made, whose private half was
-        /// shown in a QR code.
-        #[arg(long, conflicts_with = "device")]
-        legacy: bool,
     },
     /// Change what paired phones may do, without pairing a new one.
     Options {
@@ -153,11 +148,7 @@ fn main() {
         Command::Setup(args) => setup(args),
         Command::Pair { bridge, pair } => pair_phone(&bridge, &pair),
         Command::Devices => devices(),
-        Command::Unpair {
-            device,
-            all,
-            legacy,
-        } => unpair(device.as_deref(), all, legacy),
+        Command::Unpair { device, all } => unpair(device.as_deref(), all),
         Command::Options { bridge, restrict } => set_options(&bridge, &restrict).map(|_| ()),
         Command::Check { bridge, herdr } => check(&bridge, &herdr),
         Command::Uninstall => uninstall(),
@@ -360,7 +351,6 @@ fn pair_phone(target: &TargetArgs, args: &PairArgs) -> anyhow::Result<()> {
         paired.device,
         paired.key.fingerprint()
     ));
-    offer_legacy_removal(&home)?;
     Ok(())
 }
 
@@ -411,17 +401,13 @@ fn warn_joined(text: &str) {
         warn(&format!(
             "{joined} line(s) in authorized_keys carry more than one key."
         ));
-        warn("An older version of the setup script joined them. They were left alone.");
+        warn("An append without a newline guard joins lines like this. They were left alone.");
         warn("Split them by hand: each key belongs on its own line.");
     }
 }
 
-fn unpair(device: Option<&str>, all: bool, legacy: bool) -> anyhow::Result<()> {
-    let home = sys::home()?;
-    if legacy {
-        return remove_legacy_key(&home);
-    }
-    let file = keys::File::in_home(&home);
+fn unpair(device: Option<&str>, all: bool) -> anyhow::Result<()> {
+    let file = keys::File::in_home(&sys::home()?);
     let text = file.read()?;
     let (text, removed) = keys::without(&text, |blob, comment| {
         let Some(name) = comment.strip_prefix(keys::MARKER) else {
@@ -442,59 +428,6 @@ fn unpair(device: Option<&str>, all: bool, legacy: bool) -> anyhow::Result<()> {
         file.path.display()
     ));
     warn_joined(&text);
-    Ok(())
-}
-
-/// Where the old bash script kept the key it made. Its private half was
-/// shown as a QR code, so it is a key worth retiring.
-fn legacy_key(home: &std::path::Path) -> PathBuf {
-    home.join(".ssh/herdr-poc")
-}
-
-fn remove_legacy_key(home: &std::path::Path) -> anyhow::Result<()> {
-    let key = legacy_key(home);
-    let public = key.with_extension("pub");
-    let Ok(line) = std::fs::read_to_string(&public) else {
-        info("No key from the old setup script is left.");
-        return Ok(());
-    };
-    if let Some(blob) = line.split_whitespace().nth(1) {
-        let file = keys::File::in_home(home);
-        let (text, removed) = keys::without(&file.read()?, |b, _| b == blob);
-        if removed > 0 {
-            file.write(&text)?;
-            info(&format!(
-                "Removed the old setup script's key from {}.",
-                file.path.display()
-            ));
-        }
-    }
-    let _ = std::fs::remove_file(&key);
-    let _ = std::fs::remove_file(&public);
-    info(&format!("Deleted {}.", key.display()));
-    Ok(())
-}
-
-/// After a phone pairs the new way, the key the bash script made is only
-/// a risk: its private half has been on this server and on a screen. Ask
-/// once, and leave it alone on a no — a phone paired with it still uses
-/// it until the app is updated.
-fn offer_legacy_removal(home: &std::path::Path) -> anyhow::Result<()> {
-    if !legacy_key(home).with_extension("pub").exists() {
-        return Ok(());
-    }
-    println!();
-    warn(&format!(
-        "The old setup script's key is still at {}.",
-        legacy_key(home).display()
-    ));
-    warn("Its private half was shown in a QR code. Any phone still using it stops");
-    warn("working when it is removed.");
-    if ui::confirm("Remove it now?").unwrap_or(false) {
-        remove_legacy_key(home)?;
-    } else {
-        info("Remove it later with: legio unpair --legacy");
-    }
     Ok(())
 }
 
@@ -537,7 +470,6 @@ fn uninstall() -> anyhow::Result<()> {
         file.path.display()
     ));
     warn_joined(&text);
-    remove_legacy_key(&home)?;
 
     let user = sys::user()?;
     info("Lingering is left on. Turn it off with:");

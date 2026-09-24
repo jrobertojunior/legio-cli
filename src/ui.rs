@@ -1,5 +1,5 @@
-//! The four kinds of line the tool prints. Kept to the shape the bash
-//! script had, so a person who ran `vps-setup.sh` reads the same output.
+//! The four kinds of line the tool prints: a step heading, a fact, a
+//! warning, and a question.
 
 use std::io::{self, BufRead, IsTerminal, Write};
 

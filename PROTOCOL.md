@@ -1,9 +1,7 @@
-# Pairing protocol, version 2
+# Pairing protocol, version 1
 
-How a phone pairs with a machine that runs `legio`. Version 1 was
-`vps-setup.sh`: it made the key on the server and put the private half in
-the QR code. In version 2 the phone makes its key, and only the public half
-leaves the phone.
+How a phone pairs with a machine that runs `legio`. The phone makes its
+key, and only the public half leaves the phone.
 
 ## 1. The QR code
 
@@ -11,7 +9,7 @@ leaves the phone.
 
 ```json
 {
-  "v": 2,
+  "v": 1,
   "name": "vps-01",
   "host": "100.64.0.3",
   "port": 22,
@@ -26,11 +24,11 @@ leaves the phone.
 
 | Field | Meaning |
 | --- | --- |
-| `v` | Always `2`. Version 1 has a `key` field and no `token`. |
+| `v` | Always `1`. The app refuses any other version. |
 | `name` | The machine's hostname. Use it as the default connection name. |
 | `host`, `port`, `user` | The SSH login. |
-| `targetPort` | The bridge port on 127.0.0.1, as in version 1. |
-| `session` | The Herdr session, as in version 1. |
+| `targetPort` | The bridge port on 127.0.0.1. |
+| `session` | The Herdr session the app attaches panes from. |
 | `hostKey` | The SHA-256 fingerprint of the server's **ed25519** host key, in `ssh-keygen -l` form. Optional: it is left out when the server has no ed25519 host key. When it is present, the app must refuse an SSH server whose host key does not match. |
 | `pairPort` | The TCP port on `host` that takes the public key. |
 | `token` | A one-time secret: 32 random bytes, base64url without padding. |
@@ -44,7 +42,7 @@ The phone makes an ed25519 key pair and keeps the private key in the
 Keychain. Then it sends:
 
 ```
-POST http://<host>:<pairPort>/v2/pair
+POST http://<host>:<pairPort>/v1/pair
 Content-Type: application/json
 
 {
@@ -63,7 +61,7 @@ Content-Type: application/json
   UTF-8 bytes of:
 
   ```
-  "herdr-pair-v2\n" + publicKey + "\n" + device
+  "herdr-pair-v1\n" + publicKey + "\n" + device
   ```
 
   Use the `token` string as it is. Do not decode it.
@@ -71,7 +69,7 @@ Content-Type: application/json
 In Swift:
 
 ```swift
-let message = "herdr-pair-v2\n\(publicKey)\n\(device)"
+let message = "herdr-pair-v1\n\(publicKey)\n\(device)"
 let mac = HMAC<SHA256>.authenticationCode(
     for: Data(message.utf8),
     using: SymmetricKey(data: Data(token.utf8))
@@ -107,7 +105,7 @@ The phone logs in as `user` with its private key. The entry in
 `authorized_keys` looks like this:
 
 ```
-restrict,pty,port-forwarding,permitopen="127.0.0.1:4499" ssh-ed25519 AAAA… herdr-app:Jose-s-iPhone
+restrict,pty,port-forwarding,permitopen="127.0.0.1:4499" ssh-ed25519 AAAA… legio-app:Jose-s-iPhone
 ```
 
 The key can open a PTY and forward to the bridge port, plus the ports that
