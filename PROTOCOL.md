@@ -78,14 +78,15 @@ let macBase64 = Data(mac).base64EncodedString()
 ```
 
 The server holds the request open while a person at the terminal compares
-fingerprints and answers. Set the request timeout to at least 3 minutes.
-While the phone waits, it must show the SHA-256 fingerprint of its own
-public key, so the person can compare it with the one the terminal shows.
+key phrases and answers. Set the request timeout to at least 3 minutes.
+While the phone waits, it must show the key phrase of its own public key
+(section 4), so the person can compare it with the one the terminal shows.
 
 ## 3. The reply
 
-The body is always JSON: `{"status": …, "message": …, "fingerprint": …}`.
-`fingerprint` is present only on `accepted`, `declined` and `failed`.
+The body is always JSON: `{"status": …, "message": …, "phrase": …}`.
+`phrase` is the key phrase of the key that was sent. It is present only on
+`accepted`, `declined` and `failed`.
 
 | HTTP | `status` | Meaning | Listener after |
 | --- | --- | --- | --- |
@@ -99,7 +100,36 @@ The body is always JSON: `{"status": …, "message": …, "fingerprint": …}`.
 A closed listener spent the token. To pair again, run `legio pair` on
 the server for a new code.
 
-## 4. After pairing
+## 4. The key phrase
+
+The person compares five words, not a fingerprint. Both sides work them
+out the same way:
+
+1. Take the public key blob: the bytes that the base64 in the second field
+   of the `ssh-ed25519` line decodes to.
+2. Take its SHA-256 digest.
+3. Read the first 55 bits of the digest, big-endian, as five numbers of 11
+   bits. Each number is an index into the word list.
+4. Join the five words with `-`, in lowercase: `fee-jazz-naive-fruit-equip`.
+
+The word list is the BIP-39 English list (2048 words, so a word carries 11
+bits and five words carry 55). It is `src/wordlist.txt` in this repository,
+and its SHA-256 is
+`2f5eed53a4727b4bf8880d8f3f199efc90e58503646d9ff8eff3a2ed3b24dbda`. The
+app carries the same list in `KeyPhrase.swift`. If the two lists differ, the
+phone and the terminal show different words for the same key.
+
+A test vector: the key
+`AAAAC3NzaC1lZDI1NTE5AAAAIHI2iP/D59jopcwuQ7odefdufWyYlto1QwkLRcmzaf87`
+has the phrase `fee-jazz-naive-fruit-equip`.
+
+55 bits: to pass a key of their own off as the phone's, someone must find
+one whose digest starts with the same 55 bits. That is about 3.6 × 10^16
+tries, inside the time that the pairing code lives. The host key
+fingerprint in the QR code stays in the `SHA256:` form, because it is
+compared with what an SSH client shows.
+
+## 5. After pairing
 
 The phone logs in as `user` with its private key. The entry in
 `authorized_keys` looks like this:
@@ -118,7 +148,7 @@ The key can open a PTY and forward to the bridge port, plus the ports that
 - A key that someone else sends does not carry a valid MAC unless they
   have the token, and the token is only in the QR code.
 - If someone else did see the QR code, the person at the terminal sees a
-  device name and a fingerprint that do not match their phone, and says
+  device name and a key phrase that do not match their phone, and says
   no. A no spends the token.
 - The reply is not signed. A forged `accepted` only makes the phone save a
   connection whose login then fails. It does not open anything.

@@ -10,7 +10,7 @@
 //! 2. The phone scans it, makes an ed25519 key, and POSTs the public key to
 //!    `http://<host>:<pairPort>/v1/pair`, with an HMAC of it keyed by the
 //!    token.
-//! 3. This tool checks the HMAC, shows the key's fingerprint and the
+//! 3. This tool checks the HMAC, shows the key's five-word phrase and the
 //!    phone's name, and asks the person at the terminal. Only a yes writes
 //!    `authorized_keys`.
 //!
@@ -114,14 +114,14 @@ struct Reply<'a> {
     status: &'a str,
     message: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    fingerprint: Option<&'a str>,
+    phrase: Option<&'a str>,
 }
 
-fn respond(request: Request, code: u16, status: &str, message: &str, fingerprint: Option<&str>) {
+fn respond(request: Request, code: u16, status: &str, message: &str, phrase: Option<&str>) {
     let body = serde_json::to_string(&Reply {
         status,
         message,
-        fingerprint,
+        phrase,
     })
     .unwrap();
     let header = Header::from_bytes("Content-Type", "application/json").unwrap();
@@ -144,7 +144,7 @@ pub struct Paired {
 /// can answer the question without a terminal.
 pub trait Host {
     /// Shows the phone and its key, and asks whether to let it in.
-    fn approve(&mut self, device: &str, fingerprint: &str) -> anyhow::Result<bool>;
+    fn approve(&mut self, device: &str, phrase: &str) -> anyhow::Result<bool>;
     /// Writes the key. Called only after `approve` said yes.
     fn install(&mut self, key: &PublicKey, device: &str) -> anyhow::Result<()>;
 }
@@ -250,15 +250,15 @@ pub fn serve(
             }
         };
         let device = device_slug(&pair.device);
-        let fingerprint = key.fingerprint();
+        let phrase = key.phrase();
 
-        if !host.approve(&device, &fingerprint)? {
+        if !host.approve(&device, &phrase)? {
             respond(
                 request,
                 403,
                 "declined",
                 "The key was declined on the server.",
-                Some(&fingerprint),
+                Some(&phrase),
             );
             bail!("declined. The pairing code is spent; run this again for a new one");
         }
@@ -268,11 +268,11 @@ pub fn serve(
                 500,
                 "failed",
                 "The server could not save the key.",
-                Some(&fingerprint),
+                Some(&phrase),
             );
             return Err(e);
         }
-        respond(request, 200, "accepted", "Paired.", Some(&fingerprint));
+        respond(request, 200, "accepted", "Paired.", Some(&phrase));
         return Ok(Paired { key, device });
     }
 }

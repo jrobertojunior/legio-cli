@@ -54,14 +54,23 @@ impl PublicKey {
         })
     }
 
-    pub fn fingerprint(&self) -> String {
-        fingerprint_of_blob(&self.blob).expect("the blob was decoded in `parse`")
+    /// The five words a person compares — see `phrase`.
+    pub fn phrase(&self) -> String {
+        phrase_of_blob(&self.blob).expect("the blob was decoded in `parse`")
     }
 
     #[cfg(test)]
     pub fn line(&self) -> String {
         format!("{ED25519} {}", self.blob)
     }
+}
+
+/// The words for a key blob given as the base64 in `authorized_keys`.
+pub fn phrase_of_blob(blob: &str) -> anyhow::Result<String> {
+    let bytes = STANDARD
+        .decode(blob)
+        .context("the key data is not base64")?;
+    Ok(crate::phrase::of_blob(&bytes))
 }
 
 /// `SHA256:<base64 without padding>` of the decoded blob — the form
@@ -121,9 +130,10 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert_eq!(
-            key.fingerprint(),
+            fingerprint_of_blob(&key.blob).unwrap(),
             "SHA256:VI7uSq7kwiejD5+QcXWkgL/Itf9NM2bARLQW/VTm3m4"
         );
+        assert_eq!(key.phrase(), "fee-jazz-naive-fruit-equip");
     }
 
     #[test]

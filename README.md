@@ -4,8 +4,8 @@ The `legio` command. It prepares a Linux machine so the HerdrPOC iOS
 app can connect to it, and pairs phones with it.
 
 **The phone makes its own SSH key.** The QR code holds no key. The phone
-sends only its public key back, and you confirm the fingerprint on the
-terminal before the key is added. See [PROTOCOL.md](PROTOCOL.md).
+sends only its public key back, and you confirm a five-word key phrase on
+the terminal before the key is added. See [PROTOCOL.md](PROTOCOL.md).
 
 ## Build
 
@@ -44,8 +44,8 @@ Run it on the server, as the user the app logs in as:
 | --- | --- |
 | `setup` | All of the steps above. `--no-pair` stops after step 4. |
 | `pair` | Step 5 only. Works on any machine with sshd, also a Mac. On a Mac, install the bridge with `HerdrPOC/Scripts/mac-setup.sh` first. |
-| `devices` | Lists the paired phones and what each one may do. |
-| `unpair <name or fingerprint>` | Removes one phone. `--all` removes all phones. |
+| `devices` | Lists the paired phones, each with its key phrase, and what each one may do. |
+| `unpair <name or key phrase>` | Removes one phone. `--all` removes all phones. |
 | `options` | Applies `--forward-port` or `--no-restrict` to the phones that are already paired. |
 | `check` | Reports on the bridge, Herdr, sshd and the paired phones. Changes nothing. |
 | `uninstall` | Removes the units and every phone key. |

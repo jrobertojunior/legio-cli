@@ -39,8 +39,8 @@ pub struct Device {
 }
 
 impl Device {
-    pub fn fingerprint(&self) -> String {
-        sshkey::fingerprint_of_blob(&self.blob).unwrap_or_else(|_| "(unreadable key)".into())
+    pub fn phrase(&self) -> String {
+        sshkey::phrase_of_blob(&self.blob).unwrap_or_else(|_| "(unreadable key)".into())
     }
 }
 

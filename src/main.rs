@@ -8,6 +8,7 @@
 mod authorized_keys;
 mod bridge;
 mod pairing;
+mod phrase;
 mod server;
 mod sshkey;
 mod sys;
@@ -53,7 +54,7 @@ enum Command {
     Devices,
     /// Remove a paired phone's key.
     Unpair {
-        /// The phone's name or its key fingerprint, as `devices` prints them.
+        /// The phone's name or its key phrase, as `devices` prints them.
         #[arg(required_unless_present = "all")]
         device: Option<String>,
         /// Remove every paired phone.
@@ -218,11 +219,11 @@ struct Installer {
 }
 
 impl Host for Installer {
-    fn approve(&mut self, device: &str, fingerprint: &str) -> anyhow::Result<bool> {
+    fn approve(&mut self, device: &str, phrase: &str) -> anyhow::Result<bool> {
         println!();
         bold(&format!("A phone sent its key: {device}"));
-        info(&format!("Fingerprint: {fingerprint}"));
-        info("The app shows the same fingerprint. Check that they match.");
+        info("The app shows five words. Check that they match these:");
+        ui::phrase(phrase);
         if keys::devices(&self.file.read()?)
             .iter()
             .any(|d| d.name == device)
@@ -246,7 +247,7 @@ impl Host for Installer {
             info(&format!(
                 "Removed the old key of {} ({}).",
                 old.name,
-                old.fingerprint()
+                old.phrase()
             ));
         }
         if self.options.is_empty() {
@@ -349,7 +350,7 @@ fn pair_phone(target: &TargetArgs, args: &PairArgs) -> anyhow::Result<()> {
     bold(&format!(
         "Paired {} ({}).",
         paired.device,
-        paired.key.fingerprint()
+        paired.key.phrase()
     ));
     Ok(())
 }
@@ -383,7 +384,7 @@ fn devices() -> anyhow::Result<()> {
         info("No phones are paired with this machine.");
     }
     for device in &found {
-        println!("{:<24} {}", device.name, device.fingerprint());
+        println!("{:<24} {}", device.name, device.phrase());
         let options = if device.options.is_empty() {
             "(no restrictions)"
         } else {
@@ -413,11 +414,8 @@ fn unpair(device: Option<&str>, all: bool) -> anyhow::Result<()> {
         let Some(name) = comment.strip_prefix(keys::MARKER) else {
             return false;
         };
-        all || device.is_some_and(|d| {
-            d == name
-                || sshkey::fingerprint_of_blob(blob)
-                    .is_ok_and(|f| f == d || f.trim_start_matches("SHA256:") == d)
-        })
+        all || device
+            .is_some_and(|d| d == name || sshkey::phrase_of_blob(blob).is_ok_and(|p| p == d))
     });
     if removed == 0 {
         anyhow::bail!("no paired phone matches. List them with: legio devices");
