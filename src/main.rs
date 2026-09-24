@@ -1,4 +1,4 @@
-//! `legio` — prepare a machine so the HerdrPOC iOS app can connect,
+//! `legio` — prepare a machine so the Legio iOS app can connect,
 //! and pair phones with it.
 //!
 //! It installs the bridge to Herdr's socket as systemd user units, checks
@@ -27,7 +27,7 @@ use crate::pairing::{Forwards, Host, Payload};
 use crate::sshkey::PublicKey;
 use crate::ui::{bold, info, warn};
 
-/// Prepare this machine for the HerdrPOC app, and pair phones with it.
+/// Prepare this machine for the Legio app, and pair phones with it.
 ///
 /// With no command, runs `setup`: the bridge, the checks, and one pairing.
 #[derive(Parser)]

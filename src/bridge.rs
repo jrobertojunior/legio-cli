@@ -141,7 +141,7 @@ pub fn install_units(
             fs::write(
                 dir.join(format!("{UNIT_NAME}.socket")),
                 format!(
-                    "[Unit]\nDescription=TCP front for the Herdr socket (HerdrPOC app)\n\n\
+                    "[Unit]\nDescription=TCP front for the Herdr socket (Legio app)\n\n\
                      [Socket]\nListenStream=127.0.0.1:{target_port}\n\n\
                      [Install]\nWantedBy=sockets.target\n"
                 ),
@@ -149,7 +149,7 @@ pub fn install_units(
             fs::write(
                 dir.join(format!("{UNIT_NAME}.service")),
                 format!(
-                    "[Unit]\nDescription=Proxy 127.0.0.1:{target_port} to the Herdr socket (HerdrPOC app)\n\
+                    "[Unit]\nDescription=Proxy 127.0.0.1:{target_port} to the Herdr socket (Legio app)\n\
                      Requires={UNIT_NAME}.socket\nAfter={UNIT_NAME}.socket\n\n\
                      [Service]\nExecStart={proxy_bin} {socket}\n"
                 ),
@@ -164,7 +164,7 @@ pub fn install_units(
             fs::write(
                 dir.join(format!("{UNIT_NAME}.service")),
                 format!(
-                    "[Unit]\nDescription=Expose the Herdr socket as TCP 127.0.0.1:{target_port} (HerdrPOC app)\n\
+                    "[Unit]\nDescription=Expose the Herdr socket as TCP 127.0.0.1:{target_port} (Legio app)\n\
                      After=default.target\n\n\
                      [Service]\nExecStart={proxy_bin} TCP-LISTEN:{target_port},bind=127.0.0.1,reuseaddr,fork UNIX-CONNECT:{socket}\n\
                      Restart=always\nRestartSec=2\n\n\

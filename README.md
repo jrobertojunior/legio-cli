@@ -1,6 +1,6 @@
 # legio-cli
 
-The `legio` command. It prepares a Linux machine so the HerdrPOC iOS
+The `legio` command. It prepares a Linux machine so the Legio iOS
 app can connect to it, and pairs phones with it.
 
 **The phone makes its own SSH key.** The QR code holds no key. The phone
@@ -43,7 +43,7 @@ Run it on the server, as the user the app logs in as:
 | Command | What it does |
 | --- | --- |
 | `setup` | All of the steps above. `--no-pair` stops after step 4. |
-| `pair` | Step 5 only. Works on any machine with sshd, also a Mac. On a Mac, install the bridge with `HerdrPOC/Scripts/mac-setup.sh` first. |
+| `pair` | Step 5 only. Works on any machine with sshd, also a Mac. On a Mac, install the bridge with `legio/Scripts/mac-setup.sh` first. |
 | `devices` | Lists the paired phones, each with its key phrase, and what each one may do. |
 | `unpair <name or key phrase>` | Removes one phone. `--all` removes all phones. |
 | `options` | Applies `--forward-port` or `--no-restrict` to the phones that are already paired. |
