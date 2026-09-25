@@ -10,12 +10,24 @@ the terminal before the key is added. See [PROTOCOL.md](PROTOCOL.md).
 ## Install
 
 Each `v*` tag builds a release for macOS (arm64, x86_64) and Linux
-(x86_64, aarch64). The repository is private, so download with `gh`:
+(x86_64, aarch64). [`install.sh`](install.sh) finds the build for your
+machine and puts `legio` in `~/.local/bin`:
 
 ```sh
-mkdir -p ~/.local/bin && gh release download v0.1.0 -R jrobertojunior/legio-cli \
-  -p "legio-$(uname -s)-$(uname -m).tar.gz" -O - | tar -xz -C ~/.local/bin
+curl -fsSL https://raw.githubusercontent.com/jrobertojunior/legio-cli/master/install.sh | sh
 ```
+
+While the repository is private, `curl` cannot get the script. Get it
+with `gh` (logged in) in its place:
+
+```sh
+gh api repos/jrobertojunior/legio-cli/contents/install.sh -H "Accept: application/vnd.github.raw" | sh
+```
+
+- `LEGIO_VERSION=v0.1.0` installs that tag. The default is the latest release.
+- `LEGIO_DIR=/usr/local/bin` installs there. The default is `~/.local/bin`.
+
+For example: `curl -fsSL .../install.sh | LEGIO_VERSION=v0.1.0 sh`.
 
 To make a release, set `version` in `Cargo.toml`, then push the tag:
 
