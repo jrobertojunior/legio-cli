@@ -187,9 +187,7 @@ pub fn check_sshd() {
     if sshd_option("passwordauthentication").as_deref() == Some("yes") {
         warn("PasswordAuthentication is still on. The app does not need it.");
         warn("Turn it off once a phone logs in, so port 22 stops accepting passwords:");
-        warn(
-            "  echo 'PasswordAuthentication no' | sudo tee /etc/ssh/sshd_config.d/99-legio.conf",
-        );
+        warn("  echo 'PasswordAuthentication no' | sudo tee /etc/ssh/sshd_config.d/99-legio.conf");
         warn("  sudo systemctl reload ssh");
     }
 }
