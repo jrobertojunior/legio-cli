@@ -32,8 +32,11 @@ trap 'rm -rf "$tmp"' EXIT
 # curl works when the repository is public. gh works when it is private.
 if ! curl -fsSL "$url" -o "$tmp/$asset" 2>/dev/null; then
   if command -v gh >/dev/null 2>&1; then
-    if [ "$VERSION" = latest ]; then tag=; else tag=$VERSION; fi
-    gh release download $tag -R "$REPO" -p "$asset" -D "$tmp"
+    if [ "$VERSION" = latest ]; then
+      gh release download -R "$REPO" -p "$asset" -D "$tmp"
+    else
+      gh release download "$VERSION" -R "$REPO" -p "$asset" -D "$tmp"
+    fi
   else
     echo "legio: cannot download $url" >&2
     echo "legio: the repository may be private. Install gh, run 'gh auth login', and try again." >&2
