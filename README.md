@@ -7,6 +7,22 @@ iOS app can connect to it, and pairs phones with it.
 sends only its public key back, and you confirm a five-word key phrase on
 the terminal before the key is added. See [PROTOCOL.md](PROTOCOL.md).
 
+## Install
+
+Each `v*` tag builds a release for macOS (arm64, x86_64) and Linux
+(x86_64, aarch64). The repository is private, so download with `gh`:
+
+```sh
+mkdir -p ~/.local/bin && gh release download v0.1.0 -R jrobertojunior/legio-cli \
+  -p "legio-$(uname -s)-$(uname -m).tar.gz" -O - | tar -xz -C ~/.local/bin
+```
+
+To make a release, set `version` in `Cargo.toml`, then push the tag:
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+```
+
 ## Build
 
 ```sh
