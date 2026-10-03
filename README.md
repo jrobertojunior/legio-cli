@@ -3,6 +3,16 @@
 The `legio` command. It prepares a Linux machine or a Mac so the Legio
 iOS app can connect to it, and pairs phones with it.
 
+One command sets up a machine and pairs a phone:
+
+```sh
+legio pair
+```
+
+After it, the app connects, shows the Herdr dashboard, and gets a push
+notification when an agent needs input or finishes. There is nothing to
+copy from the app.
+
 **The phone makes its own SSH key.** The QR code holds no key. The phone
 sends only its public key back, and you confirm a five-word key phrase on
 the terminal before the key is added. See [PROTOCOL.md](PROTOCOL.md).
@@ -40,7 +50,8 @@ it over the old one. If a step fails, the old binary stays.
 
 After the update, the new binary runs `legio after-update`. A release
 uses it for its own work, for example to restart a service that it
-changed.
+changed. On a machine with Herdr, it installs or restarts the
+notification watcher.
 
 v0.1.0 has no `update` command. To go from v0.1.0 to a newer version,
 run `install.sh` again.
@@ -77,10 +88,11 @@ scp target/x86_64-unknown-linux-musl/release/legio server:
 Run it on the server, as the user the app logs in as:
 
 ```sh
-./legio            # same as: legio setup
+legio pair         # same as: legio
 ```
 
-`setup` does these steps on Linux:
+`pair` does these steps on Linux. You can run it again at any time: a step
+that is already done is checked, not done again.
 
 1. Finds a proxy: `systemd-socket-proxyd` first, then socat. It installs
    socat only when systemd has no proxy.
@@ -92,24 +104,32 @@ Run it on the server, as the user the app logs in as:
 5. Checks the SSH server: key login, the `authorized_keys` path, password
    login, and the permissions on your home directory.
 6. Shows the pairing QR code and waits for the phone.
+7. Saves the phone's push secret, which came with its key, and sends the
+   phone a test notification.
+
+Steps 1 to 4 need Herdr on the machine. Without Herdr, `pair` skips them:
+the app opens terminals over SSH, with no dashboard and no notifications.
+If a step fails, `pair` shows a warning and goes on to the pairing.
 
 On a Mac, steps 1 to 3 are different. `legio` has
 [`scripts/mac-setup.sh`](scripts/mac-setup.sh) built into its binary, and
 runs it in place of the systemd units. The script checks Remote Login,
 installs socat with Homebrew, and writes a `com.legio.bridge` LaunchAgent
 that keeps 127.0.0.1:4499 open to the socket. `--on-demand` lets launchd
-hold the port and start one socat for each connection. Steps 4 to 6 are
+hold the port and start one socat for each connection. Steps 4 to 7 are
 the same as on Linux, but step 4 writes a `com.legio.watch` LaunchAgent.
+
+When the bridge is installed and answers, steps 1 to 3 only check it, so
+the phones that are connected stay connected. `--use-socat` and
+`--on-demand` install it again.
 
 | Command | What it does |
 | --- | --- |
-| `setup` | All of the steps above. `--no-pair` stops after step 5. |
-| `pair` | Step 6 only. Works on any machine with sshd. |
+| `pair` | All of the steps above. `--no-pair` stops after step 5. `setup` is the old name. |
 | `devices` | Lists the paired phones, each with its key phrase, and what each one may do. |
 | `unpair <name or key phrase>` | Removes one phone. `--all` removes all phones. |
 | `options` | Applies `--forward-port` or `--no-restrict` to the phones that are already paired. |
 | `check` | Reports on the bridge, Herdr, the notification watcher, sshd and the paired phones. Changes nothing. |
-| `push add <secret> --connection <id>` | Adds a phone to the notification list. The app runs it. Reads the secret from stdin when it is left out. |
 | `push list` | Lists the phones that get notifications. |
 | `push remove <name or secret start>` | Stops sending to one phone. `--all` stops sending to all phones. |
 | `push test` | Sends a test notification to every phone. |
@@ -147,11 +167,26 @@ snapshots, it sends a push to each phone in
 The push goes through the relay at `https://legiorelay.jrobe.cloud`
 ([`legio-relay`](https://github.com/jrobertojunior/legio-relay)). The relay
 holds the APNs key. This machine holds only one device secret for each
-phone, which the app gives it with `legio push add`. Set `LEGIO_RELAY` to
-use another relay.
+phone. Set `LEGIO_RELAY` to use another relay.
+
+The phone gives this machine its secret in two ways, and you do neither
+by hand:
+
+- **When it pairs.** The secret goes in the pairing request, sealed with a
+  key made from the QR code's token. `legio pair` saves it and sends a
+  test notification.
+- **Each time it connects.** The app runs `legio push add` over its SSH
+  connection, with the secret on stdin. This updates a secret that
+  changed, and adds the phone again after `push remove`. It also starts
+  the watcher when it is not running. A machine that was paired before
+  v0.3.0 gets notifications this way after `legio update`.
+
+The app asks for the notification permission when it pairs. If you said
+no, turn notifications on in the iPhone's Settings → Legio, then open the
+app.
 
 The service runs this same `legio` binary. If you move or reinstall
-`legio`, run `legio setup` again.
+`legio`, run `legio pair --no-pair` again.
 
 ## What it changes
 

@@ -48,10 +48,12 @@ Content-Type: application/json
 {
   "publicKey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI… anything",
   "device": "Jose's iPhone",
-  "mac": "<base64>"
+  "mac": "<base64>",
+  "push": { "connectionId": "<the app's connection id>", "sealed": "<base64>" }
 }
 ```
 
+- `push` is optional. See section 2a.
 - `publicKey` is the OpenSSH public key line. Only `ssh-ed25519` is
   accepted. The comment is ignored.
 - `device` is a name for the phone. The server changes each character
@@ -81,6 +83,28 @@ The server holds the request open while a person at the terminal compares
 key phrases and answers. Set the request timeout to at least 3 minutes.
 While the phone waits, it must show the key phrase of its own public key
 (section 4), so the person can compare it with the one the terminal shows.
+
+## 2a. The push secret
+
+When the phone allows notifications, it sends its relay device secret in
+`push`, so the machine can send it notifications at once. The secret is a
+secret, and the request is plain HTTP, so it is sealed:
+
+- `key` = `HMAC-SHA256(key: UTF-8 bytes of token, message: "legio-push-v1")`,
+  32 bytes.
+- `sealed` = standard base64 of ChaCha20-Poly1305 with that key: a random
+  12-byte nonce, then the ciphertext of the secret's UTF-8 bytes, then the
+  16-byte tag. This is CryptoKit's `ChaChaPoly.SealedBox.combined`.
+- The additional authenticated data is the UTF-8 bytes of
+  `"legio-push-v1\n" + connectionId`, so a sealed secret cannot be moved
+  to another connection id.
+- `connectionId` is the app's id for this connection: 1 to 100 characters
+  of `A–Z a–z 0–9 - _`. Each notification carries it, so a tap opens this
+  machine.
+
+The machine opens the seal only after it added the key. A seal that does
+not open costs the notifications, never the pairing. A machine that does
+not know `push` ignores it.
 
 ## 3. The reply
 

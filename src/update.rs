@@ -172,7 +172,7 @@ pub fn run(version: Option<&str>, check_only: bool, force: bool) -> anyhow::Resu
         .arg(CURRENT)
         .status();
     if !status.is_ok_and(|s| s.success()) {
-        warn("The new version could not finish the update. Run: legio setup");
+        warn("The new version could not finish the update. Run: legio pair");
     }
     Ok(())
 }
@@ -239,24 +239,15 @@ pub fn after_update(from: &str) -> anyhow::Result<()> {
         // or an old place). It keeps the socket it had.
         let socket = crate::watch::installed_socket(&home).unwrap_or(default_socket);
         crate::watch::install(&home, &socket)?;
-    } else if bridge_installed(&home) {
+    } else if crate::watch::herdr_here(&home, &default_socket) {
         // 0.2.0 brought the watcher. A machine set up before it gets it
         // here, so the update alone turns notifications on.
         info("Installing the notification watcher.");
         crate::watch::install(&home, &default_socket)?;
     } else {
-        info("This machine has no bridge. Run legio setup to use it with the app.");
+        info("Herdr is not on this machine, so there is no agent to watch.");
     }
     Ok(())
-}
-
-/// Whether `legio setup` ran on this machine.
-fn bridge_installed(home: &Path) -> bool {
-    if cfg!(target_os = "macos") {
-        crate::mac::agent_plist(home).exists()
-    } else {
-        crate::bridge::installed_unit(home).is_some()
-    }
 }
 
 #[cfg(test)]

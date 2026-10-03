@@ -3,7 +3,7 @@
 # mac-setup.sh — install the bridge on a Mac, for the Legio iOS app.
 #
 # `legio` carries this script in its binary and runs it on macOS, in place
-# of the systemd units it writes on Linux: `legio setup` installs with it,
+# of the systemd units it writes on Linux: `legio pair` installs with it,
 # and `legio uninstall` removes with it. Run `legio`, not this file.
 #
 # The app makes one SSH connection to this Mac. Over that connection it
@@ -17,7 +17,7 @@
 #   3. Installs a LaunchAgent that keeps the TCP port open across reboots,
 #      then asks the running Herdr whether it is new enough for the app.
 #
-# `legio setup` then checks the SSH server and pairs the phone. The phone
+# `legio pair` then checks the SSH server and pairs the phone. The phone
 # makes its own key and sends only the public half; this script makes no key.
 #
 # Arguments, which `legio` passes:
@@ -250,7 +250,7 @@ probe_agent_kinds() {
             ;;
         "")
             warn "Herdr did not answer within 5 seconds. Make sure the server"
-            warn "is running, then run legio setup again."
+            warn "is running, then run legio pair again."
             ;;
         *"unknown variant"*|*'"error"'*)
             warn "This Herdr does not know the 'agent.kinds' method."
@@ -261,7 +261,7 @@ probe_agent_kinds() {
             warn "  herdr channel set preview"
             warn "  herdr update"
             warn "  herdr server stop     # the running server keeps the old binary"
-            warn "Then start Herdr again and run legio setup again."
+            warn "Then start Herdr again and run legio pair again."
             ;;
         *)
             warn "Herdr gave an answer this script does not recognise:"

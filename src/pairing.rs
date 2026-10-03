@@ -19,13 +19,19 @@
 //! whoever sends a key has seen the QR code, and the question at the
 //! terminal covers the case where someone else has seen it too. See
 //! `PROTOCOL.md` for the wire format.
+//!
+//! The same request can carry the phone's push secret, so a pairing also
+//! turns on notifications. That one *is* a secret, so it travels sealed
+//! with a key made from the token.
 
 use std::io::Read;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, bail};
+use anyhow::{Context, anyhow, bail};
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use chacha20poly1305::aead::{Aead, Payload as Sealed};
+use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -80,6 +86,107 @@ pub struct PairRequest {
     pub public_key: String,
     pub device: String,
     pub mac: String,
+    /// The phone's push secret, when it allows notifications. Absent from
+    /// an app that does not, and from apps older than this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub push: Option<PushRequest>,
+}
+
+/// The push part of a pairing request: the relay's device secret for the
+/// phone, sealed, and the app's id for its connection to this machine.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct PushRequest {
+    #[serde(rename = "connectionId")]
+    pub connection_id: String,
+    /// Standard base64 of ChaCha20-Poly1305's nonce (12 bytes), ciphertext
+    /// and tag (16 bytes), in that order — CryptoKit's `combined`.
+    pub sealed: String,
+}
+
+/// The push secret, opened.
+#[derive(Debug, PartialEq, Eq)]
+pub struct PushGrant {
+    pub connection_id: String,
+    pub secret: String,
+}
+
+/// The sealing key: HMAC-SHA256 of a fixed label, keyed by the token. Not
+/// the token itself, so the HMAC on the request and the seal never share
+/// a key.
+fn push_key(token: &str) -> [u8; 32] {
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(token.as_bytes()).expect("HMAC takes any key length");
+    mac.update(b"legio-push-v1");
+    mac.finalize().into_bytes().into()
+}
+
+/// The bytes the seal covers besides the secret, so a sealed secret cannot
+/// be moved to another connection id.
+fn push_aad(connection_id: &str) -> String {
+    format!("legio-push-v1\n{connection_id}")
+}
+
+impl PushRequest {
+    pub fn open(&self, token: &str) -> anyhow::Result<PushGrant> {
+        let id_ok = (1..=100).contains(&self.connection_id.len())
+            && self
+                .connection_id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+        if !id_ok {
+            bail!("the phone sent a connection id this tool does not accept");
+        }
+        let sealed = STANDARD
+            .decode(&self.sealed)
+            .context("the push secret is not base64")?;
+        if sealed.len() < 12 + 16 {
+            bail!("the push secret is too short");
+        }
+        let (nonce, sealed) = sealed.split_at(12);
+        let key = Key::from(push_key(token));
+        let nonce =
+            Nonce::try_from(nonce).map_err(|_| anyhow!("the push nonce is not 12 bytes"))?;
+        let aad = push_aad(&self.connection_id);
+        let secret = ChaCha20Poly1305::new(&key)
+            .decrypt(
+                &nonce,
+                Sealed {
+                    msg: sealed,
+                    aad: aad.as_bytes(),
+                },
+            )
+            .map_err(|_| anyhow!("the push secret was not sealed with this pairing code"))?;
+        let secret = String::from_utf8(secret).context("the push secret is not text")?;
+        crate::push::check_secret(&secret)?;
+        Ok(PushGrant {
+            connection_id: self.connection_id.clone(),
+            secret,
+        })
+    }
+
+    /// What the app does. Here for the tests, which play the phone.
+    #[cfg(test)]
+    pub fn seal(token: &str, connection_id: &str, secret: &str) -> Self {
+        let key = Key::from(push_key(token));
+        let nonce = [7u8; 12];
+        let aad = push_aad(connection_id);
+        let mut combined = nonce.to_vec();
+        combined.extend(
+            ChaCha20Poly1305::new(&key)
+                .encrypt(
+                    &Nonce::from(nonce),
+                    Sealed {
+                        msg: secret.as_bytes(),
+                        aad: aad.as_bytes(),
+                    },
+                )
+                .unwrap(),
+        );
+        Self {
+            connection_id: connection_id.into(),
+            sealed: STANDARD.encode(combined),
+        }
+    }
 }
 
 /// The bytes the HMAC covers. The public key *and* the name, so neither
@@ -138,6 +245,8 @@ fn respond(request: Request, code: u16, status: &str, message: &str, phrase: Opt
 pub struct Paired {
     pub key: PublicKey,
     pub device: String,
+    /// The push secret the phone sent, opened. `None` when it sent none.
+    pub push: Option<anyhow::Result<PushGrant>>,
 }
 
 /// What the listener asks of the rest of the tool. A trait, so the tests
@@ -273,7 +382,10 @@ pub fn serve(
             return Err(e);
         }
         respond(request, 200, "accepted", "Paired.", Some(&phrase));
-        return Ok(Paired { key, device });
+        // Opened after the key is in, not before: a seal that does not
+        // open costs the notifications, never the pairing.
+        let push = pair.push.as_ref().map(|p| p.open(token));
+        return Ok(Paired { key, device, push });
     }
 }
 
@@ -417,8 +529,60 @@ mod tests {
             mac: sign(token, &public_key, device),
             public_key,
             device: device.into(),
+            push: None,
         })
         .unwrap()
+    }
+
+    const SECRET: &str = "4bdhpjaLlBQ68G5j8_SGmJHUL6Ysj28qYoLDmU5BsME";
+
+    #[test]
+    fn a_pairing_carries_the_push_secret() {
+        let public_key = sample_line(9);
+        let body = serde_json::to_string(&PairRequest {
+            mac: sign("tok", &public_key, "x"),
+            public_key,
+            device: "x".into(),
+            push: Some(PushRequest::seal("tok", "C0FFEE-1", SECRET)),
+        })
+        .unwrap();
+        let (result, _, _) = run(true, vec![body]);
+        let grant = result.unwrap().push.unwrap().unwrap();
+        assert_eq!(
+            grant,
+            PushGrant {
+                connection_id: "C0FFEE-1".into(),
+                secret: SECRET.into()
+            }
+        );
+    }
+
+    #[test]
+    fn a_push_secret_opens_only_with_its_token_and_connection() {
+        let sealed = PushRequest::seal("tok", "C1", SECRET);
+        assert!(sealed.open("tok").is_ok());
+        assert!(sealed.open("other").is_err());
+        let moved = PushRequest {
+            connection_id: "C2".into(),
+            sealed: sealed.sealed.clone(),
+        };
+        assert!(moved.open("tok").is_err());
+        let bad_id = PushRequest {
+            connection_id: "a b".into(),
+            sealed: sealed.sealed,
+        };
+        assert!(bad_id.open("tok").is_err());
+    }
+
+    /// The app's `PairingExchangeTests` seals the same secret with the same
+    /// nonce and expects these same bytes. A change to the key, the label
+    /// or the layout on one side breaks a test, not a phone.
+    #[test]
+    fn the_seal_matches_the_app() {
+        assert_eq!(
+            PushRequest::seal("tok", "C1", SECRET).sealed,
+            "BwcHBwcHBwcHBwcHrr6EtxsB0pwu1YAqRGJK0JjfHo7hLhBB21vICn9MKqVwkwHIUiPPesGMtvInNIQKXK+eNeRb+Sgftnw="
+        );
     }
 
     #[test]
@@ -461,3 +625,4 @@ mod tests {
         assert!(statuses[0].contains("401"));
     }
 }
+
