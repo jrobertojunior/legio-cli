@@ -329,28 +329,36 @@ pub fn is_installed(home: &Path) -> bool {
     }
 }
 
-/// Restarts the watcher, so it runs the binary that is on disk now. A
-/// running process keeps the old binary until it starts again.
-pub fn restart(home: &Path) -> anyhow::Result<()> {
-    let ok = if cfg!(target_os = "macos") {
-        let target = gui_target()?;
-        sys::succeeds(
-            "launchctl",
-            &["kickstart", "-k", &format!("{target}/{LABEL}")],
-        ) || sys::succeeds(
-            "launchctl",
-            &["bootstrap", &target, &agent_plist(home).to_string_lossy()],
-        )
+/// The socket the installed watcher reads, from its service file.
+pub fn installed_socket(home: &Path) -> Option<PathBuf> {
+    if cfg!(target_os = "macos") {
+        socket_in_plist(&std::fs::read_to_string(agent_plist(home)).ok()?)
     } else {
-        sys::succeeds(
-            "systemctl",
-            &["--user", "restart", &format!("{UNIT_NAME}.service")],
-        )
-    };
-    if !ok {
-        bail!("could not restart the notification watcher");
+        socket_in_unit(&std::fs::read_to_string(unit_file(home)).ok()?)
     }
-    Ok(())
+}
+
+fn socket_in_plist(plist: &str) -> Option<PathBuf> {
+    let strings: Vec<&str> = plist
+        .split("<string>")
+        .skip(1)
+        .filter_map(|part| part.split("</string>").next())
+        .collect();
+    let at = strings.iter().position(|s| *s == "--socket")?;
+    let socket = strings.get(at + 1)?;
+    Some(PathBuf::from(
+        socket
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&amp;", "&"),
+    ))
+}
+
+fn socket_in_unit(unit: &str) -> Option<PathBuf> {
+    let exec = unit.lines().find_map(|l| l.strip_prefix("ExecStart="))?;
+    let mut words = exec.split_whitespace();
+    words.find(|w| *w == "--socket")?;
+    words.next().map(PathBuf::from)
 }
 
 pub fn remove(home: &Path) {
@@ -434,6 +442,25 @@ mod tests {
             title: "fix the build".into(),
             workspace: "legio".into(),
         }
+    }
+
+    #[test]
+    fn reads_the_socket_from_the_service_files() {
+        let plist = "<array>\n<string>/old/legio</string>\n<string>watch</string>\n\
+                     <string>--socket</string>\n<string>/home/a &amp; b/herdr.sock</string>\n</array>";
+        assert_eq!(
+            socket_in_plist(plist),
+            Some(PathBuf::from("/home/a & b/herdr.sock"))
+        );
+        let unit = "[Service]\nExecStart=/old/legio watch --socket /home/u/.config/herdr/herdr.sock\nRestart=always\n";
+        assert_eq!(
+            socket_in_unit(unit),
+            Some(PathBuf::from("/home/u/.config/herdr/herdr.sock"))
+        );
+        assert_eq!(
+            socket_in_unit("[Service]\nExecStart=/old/legio watch\n"),
+            None
+        );
     }
 
     #[test]

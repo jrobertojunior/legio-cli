@@ -232,15 +232,18 @@ pub fn after_update(from: &str) -> anyhow::Result<()> {
         info(&format!("Updated from v{from} to v{CURRENT}."));
     }
     let home = crate::sys::home()?;
+    let default_socket = home.join(".config/herdr/herdr.sock");
     if crate::watch::is_installed(&home) {
-        // The watcher runs this binary, and still runs the old one.
-        crate::watch::restart(&home)?;
-        info("Restarted the notification watcher.");
+        // Written again, not only restarted: the service names the binary
+        // that ran `setup`, and that may not be this one (a build folder,
+        // or an old place). It keeps the socket it had.
+        let socket = crate::watch::installed_socket(&home).unwrap_or(default_socket);
+        crate::watch::install(&home, &socket)?;
     } else if bridge_installed(&home) {
         // 0.2.0 brought the watcher. A machine set up before it gets it
         // here, so the update alone turns notifications on.
         info("Installing the notification watcher.");
-        crate::watch::install(&home, &home.join(".config/herdr/herdr.sock"))?;
+        crate::watch::install(&home, &default_socket)?;
     } else {
         info("This machine has no bridge. Run legio setup to use it with the app.");
     }
