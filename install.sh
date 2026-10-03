@@ -21,33 +21,42 @@ esac
 asset="legio-$os-$arch.tar.gz"
 
 if [ "$VERSION" = latest ]; then
-  url="https://github.com/$REPO/releases/latest/download/$asset"
+  base="https://github.com/$REPO/releases/latest/download"
 else
-  url="https://github.com/$REPO/releases/download/$VERSION/$asset"
+  base="https://github.com/$REPO/releases/download/$VERSION"
 fi
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-# curl works when the repository is public. gh works when it is private.
-if ! curl -fsSL "$url" -o "$tmp/$asset" 2>/dev/null; then
-  if command -v gh >/dev/null 2>&1; then
-    if [ "$VERSION" = latest ]; then
-      gh release download -R "$REPO" -p "$asset" -D "$tmp"
-    else
-      gh release download "$VERSION" -R "$REPO" -p "$asset" -D "$tmp"
-    fi
+if ! curl -fsSL "$base/$asset" -o "$tmp/$asset"; then
+  echo "legio: cannot download $base/$asset" >&2
+  exit 1
+fi
+
+# The release lists the SHA-256 of each tarball. A file that does not
+# match is not installed.
+if curl -fsSL "$base/SHA256SUMS" -o "$tmp/SHA256SUMS"; then
+  want=$(awk -v a="$asset" '$2 == a || $2 == "*" a { print $1 }' "$tmp/SHA256SUMS")
+  if command -v sha256sum >/dev/null 2>&1; then
+    got=$(sha256sum "$tmp/$asset" | awk '{ print $1 }')
   else
-    echo "legio: cannot download $url" >&2
-    echo "legio: the repository may be private. Install gh, run 'gh auth login', and try again." >&2
+    got=$(shasum -a 256 "$tmp/$asset" | awk '{ print $1 }')
+  fi
+  if [ -z "$want" ] || [ "$want" != "$got" ]; then
+    echo "legio: $asset does not match SHA256SUMS. Nothing was installed." >&2
     exit 1
   fi
+else
+  echo "legio: cannot download SHA256SUMS. Nothing was installed." >&2
+  exit 1
 fi
 
 mkdir -p "$DIR"
 tar -xzf "$tmp/$asset" -C "$DIR"
 chmod +x "$DIR/legio"
 echo "legio: installed $("$DIR/legio" --version 2>/dev/null || echo legio) in $DIR"
+echo "legio: update it later with: legio update"
 
 case ":$PATH:" in
   *":$DIR:"*) ;;

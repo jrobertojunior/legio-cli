@@ -14,6 +14,7 @@ mod server;
 mod sshkey;
 mod sys;
 mod ui;
+mod update;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -78,6 +79,26 @@ enum Command {
     },
     /// Remove the bridge units and every paired phone's key.
     Uninstall,
+    /// Replace this binary with the latest release.
+    Update {
+        /// Install this release, for example v0.2.0. It may be older than
+        /// this one: that is how you go back from a bad release.
+        #[arg(long)]
+        version: Option<String>,
+        /// Only say whether a newer release is out.
+        #[arg(long, conflicts_with = "version")]
+        check: bool,
+        /// Install the latest release even when this is the same version.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Run by `update` with the new binary, so it can finish its own update.
+    #[command(hide = true)]
+    AfterUpdate {
+        /// The version that ran the update.
+        #[arg(long)]
+        from: String,
+    },
 }
 
 #[derive(Args, Clone)]
@@ -158,6 +179,12 @@ fn main() {
         Command::Options { bridge, restrict } => set_options(&bridge, &restrict).map(|_| ()),
         Command::Check { bridge, herdr } => check(&bridge, &herdr),
         Command::Uninstall => uninstall(),
+        Command::Update {
+            version,
+            check,
+            force,
+        } => update::run(version.as_deref(), check, force),
+        Command::AfterUpdate { from } => update::after_update(&from),
     };
     if let Err(e) = result {
         eprintln!("\x1b[31mERROR: {e:#}\x1b[0m");

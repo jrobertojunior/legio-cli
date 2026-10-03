@@ -11,17 +11,11 @@ the terminal before the key is added. See [PROTOCOL.md](PROTOCOL.md).
 
 Each `v*` tag builds a release for macOS (arm64, x86_64) and Linux
 (x86_64, aarch64). [`install.sh`](install.sh) finds the build for your
-machine and puts `legio` in `~/.local/bin`:
+machine, checks it against the release's `SHA256SUMS`, and puts `legio`
+in `~/.local/bin`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/jrobertojunior/legio-cli/master/install.sh | sh
-```
-
-While the repository is private, `curl` cannot get the script. Get it
-with `gh` (logged in) in its place:
-
-```sh
-gh api repos/jrobertojunior/legio-cli/contents/install.sh -H "Accept: application/vnd.github.raw" | sh
 ```
 
 - `LEGIO_VERSION=v0.1.0` installs that tag. The default is the latest release.
@@ -29,11 +23,40 @@ gh api repos/jrobertojunior/legio-cli/contents/install.sh -H "Accept: applicatio
 
 For example: `curl -fsSL .../install.sh | LEGIO_VERSION=v0.1.0 sh`.
 
-To make a release, set `version` in `Cargo.toml`, then push the tag:
+## Update
 
 ```sh
-git tag v0.1.0 && git push origin v0.1.0
+legio update
 ```
+
+`update` downloads the latest release for this machine and checks it
+against `SHA256SUMS`. Then it runs the new binary one time, and renames
+it over the old one. If a step fails, the old binary stays.
+
+- `legio update --check` only says whether a newer release is out.
+- `legio update --version v0.1.0` installs that release, also an older
+  one. Use it to go back from a bad release.
+- `legio update --force` installs the latest release again.
+
+After the update, the new binary runs `legio after-update`. A release
+uses it for its own work, for example to restart a service that it
+changed.
+
+v0.1.0 has no `update` command. To go from v0.1.0 to a newer version,
+run `install.sh` again.
+
+## Release
+
+1. Set `version` in `Cargo.toml`, run `cargo build`, and commit
+   `Cargo.toml` and `Cargo.lock`.
+2. Push a tag with the same version:
+
+   ```sh
+   git tag v0.1.1 && git push origin v0.1.1
+   ```
+
+The release workflow builds the four binaries, writes `SHA256SUMS`, and
+publishes the release. Machines get it with `legio update`.
 
 ## Build
 
@@ -84,6 +107,7 @@ the same as on Linux.
 | `unpair <name or key phrase>` | Removes one phone. `--all` removes all phones. |
 | `options` | Applies `--forward-port` or `--no-restrict` to the phones that are already paired. |
 | `check` | Reports on the bridge, Herdr, sshd and the paired phones. Changes nothing. |
+| `update` | Replaces `legio` with the latest release. See [Update](#update). |
 | `uninstall` | Removes the units (the LaunchAgent on a Mac) and every phone key. |
 
 Frequent options:
