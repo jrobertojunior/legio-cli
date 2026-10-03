@@ -87,28 +87,35 @@ Run it on the server, as the user the app logs in as:
 2. Checks that the Herdr socket exists.
 3. Installs a systemd user unit that keeps 127.0.0.1:4499 open to the
    socket. Then it asks Herdr if it knows `agent.kinds`.
-4. Checks the SSH server: key login, the `authorized_keys` path, password
+4. Installs the notification watcher as a systemd user unit (see
+   [Notifications](#notifications)).
+5. Checks the SSH server: key login, the `authorized_keys` path, password
    login, and the permissions on your home directory.
-5. Shows the pairing QR code and waits for the phone.
+6. Shows the pairing QR code and waits for the phone.
 
 On a Mac, steps 1 to 3 are different. `legio` has
 [`scripts/mac-setup.sh`](scripts/mac-setup.sh) built into its binary, and
 runs it in place of the systemd units. The script checks Remote Login,
 installs socat with Homebrew, and writes a `com.legio.bridge` LaunchAgent
 that keeps 127.0.0.1:4499 open to the socket. `--on-demand` lets launchd
-hold the port and start one socat for each connection. Steps 4 and 5 are
-the same as on Linux.
+hold the port and start one socat for each connection. Steps 4 to 6 are
+the same as on Linux, but step 4 writes a `com.legio.watch` LaunchAgent.
 
 | Command | What it does |
 | --- | --- |
-| `setup` | All of the steps above. `--no-pair` stops after step 4. |
-| `pair` | Step 5 only. Works on any machine with sshd. |
+| `setup` | All of the steps above. `--no-pair` stops after step 5. |
+| `pair` | Step 6 only. Works on any machine with sshd. |
 | `devices` | Lists the paired phones, each with its key phrase, and what each one may do. |
 | `unpair <name or key phrase>` | Removes one phone. `--all` removes all phones. |
 | `options` | Applies `--forward-port` or `--no-restrict` to the phones that are already paired. |
-| `check` | Reports on the bridge, Herdr, sshd and the paired phones. Changes nothing. |
+| `check` | Reports on the bridge, Herdr, the notification watcher, sshd and the paired phones. Changes nothing. |
+| `push add <secret> --connection <id>` | Adds a phone to the notification list. The app runs it. Reads the secret from stdin when it is left out. |
+| `push list` | Lists the phones that get notifications. |
+| `push remove <name or secret start>` | Stops sending to one phone. `--all` stops sending to all phones. |
+| `push test` | Sends a test notification to every phone. |
+| `watch` | Runs the notification watcher. The service runs it; you do not. |
 | `update` | Replaces `legio` with the latest release. See [Update](#update). |
-| `uninstall` | Removes the units (the LaunchAgent on a Mac) and every phone key. |
+| `uninstall` | Removes the units (the LaunchAgents on a Mac), the notification list, and every phone key. |
 
 Frequent options:
 
@@ -122,11 +129,40 @@ Frequent options:
   pairing, or pair over Tailscale.
 - `--no-qr` — print the pairing code as JSON, for the app's Paste button.
 
+## Notifications
+
+iOS stops the app's SSH connection soon after the app goes to the
+background. So this machine tells the phone when an agent needs it.
+
+`legio watch` reads Herdr's `session.snapshot` every 2 seconds. When an
+agent changes to `blocked` or `done` and keeps that status for two
+snapshots, it sends a push to each phone in
+`~/.config/legio/push.json`:
+
+| Status | Notification | Level |
+| --- | --- | --- |
+| `blocked` | "Claude needs input" | time-sensitive |
+| `done` | "Claude finished" | active |
+
+The push goes through the relay at `https://legiorelay.jrobe.cloud`
+([`legio-relay`](https://github.com/jrobertojunior/legio-relay)). The relay
+holds the APNs key. This machine holds only one device secret for each
+phone, which the app gives it with `legio push add`. Set `LEGIO_RELAY` to
+use another relay.
+
+The service runs this same `legio` binary. If you move or reinstall
+`legio`, run `legio setup` again.
+
 ## What it changes
 
 - `~/.config/systemd/user/herdr-bridge.{socket,service}` on Linux.
 - `~/Library/LaunchAgents/com.legio.bridge.plist` on a Mac, with its log
   in `~/Library/Logs/com.legio.bridge.log`.
+- `~/.config/systemd/user/legio-watch.service` on Linux, or
+  `~/Library/LaunchAgents/com.legio.watch.plist` on a Mac, with its log in
+  `~/Library/Logs/com.legio.watch.log`.
+- `~/.config/legio/push.json` (mode 600) — the device secrets of the
+  phones that get notifications.
 - `~/.ssh/authorized_keys` — one line for each phone, with the comment
   `legio-app:<phone>`. The tool copies the file to
   `authorized_keys.herdr-backup-<time>` before each change, and replaces
