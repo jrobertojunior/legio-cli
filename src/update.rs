@@ -231,7 +231,29 @@ pub fn after_update(from: &str) -> anyhow::Result<()> {
     if from != CURRENT {
         info(&format!("Updated from v{from} to v{CURRENT}."));
     }
+    let home = crate::sys::home()?;
+    if crate::watch::is_installed(&home) {
+        // The watcher runs this binary, and still runs the old one.
+        crate::watch::restart(&home)?;
+        info("Restarted the notification watcher.");
+    } else if bridge_installed(&home) {
+        // 0.2.0 brought the watcher. A machine set up before it gets it
+        // here, so the update alone turns notifications on.
+        info("Installing the notification watcher.");
+        crate::watch::install(&home, &home.join(".config/herdr/herdr.sock"))?;
+    } else {
+        info("This machine has no bridge. Run legio setup to use it with the app.");
+    }
     Ok(())
+}
+
+/// Whether `legio setup` ran on this machine.
+fn bridge_installed(home: &Path) -> bool {
+    if cfg!(target_os = "macos") {
+        crate::mac::agent_plist(home).exists()
+    } else {
+        crate::bridge::installed_unit(home).is_some()
+    }
 }
 
 #[cfg(test)]

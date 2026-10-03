@@ -10,11 +10,13 @@ mod bridge;
 mod mac;
 mod pairing;
 mod phrase;
+mod push;
 mod server;
 mod sshkey;
 mod sys;
 mod ui;
 mod update;
+mod watch;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -99,6 +101,44 @@ enum Command {
         #[arg(long)]
         from: String,
     },
+    /// Send a push to the phones when an agent needs input or finishes.
+    /// `setup` installs this as a service; you do not run it by hand.
+    Watch {
+        #[command(flatten)]
+        herdr: HerdrArgs,
+    },
+    /// The phones that get push notifications from this machine.
+    #[command(subcommand)]
+    Push(PushCommand),
+}
+
+#[derive(Subcommand)]
+enum PushCommand {
+    /// Add a phone. The app runs this when it connects.
+    Add {
+        /// The device secret the relay gave the phone. Read from stdin
+        /// when left out, so it does not show in the process list.
+        secret: Option<String>,
+        /// The app's id for its connection to this machine.
+        #[arg(long)]
+        connection: String,
+        /// The phone's name.
+        #[arg(long, default_value = "")]
+        name: String,
+    },
+    /// List the phones that get notifications.
+    List,
+    /// Stop sending to a phone.
+    Remove {
+        /// The phone's name, or the start of its secret, as `list` prints them.
+        #[arg(required_unless_present = "all")]
+        device: Option<String>,
+        /// Stop sending to every phone.
+        #[arg(long, conflicts_with = "device")]
+        all: bool,
+    },
+    /// Send a test notification to every phone.
+    Test,
 }
 
 #[derive(Args, Clone)]
@@ -185,6 +225,8 @@ fn main() {
             force,
         } => update::run(version.as_deref(), check, force),
         Command::AfterUpdate { from } => update::after_update(&from),
+        Command::Watch { herdr } => socket_path(&herdr).and_then(|s| watch::run(&s, &sys::home()?)),
+        Command::Push(command) => push_command(command),
     };
     if let Err(e) = result {
         eprintln!("\x1b[31mERROR: {e:#}\x1b[0m");
@@ -223,16 +265,24 @@ fn setup(args: SetupArgs) -> anyhow::Result<()> {
         bridge::probe_agent_kinds(port);
     }
 
+    // The bridge carries the app while it is open. The watcher is what
+    // reaches the phone when it is not.
+    bold("4. Installing the notification watcher");
+    if let Err(e) = watch::install(&home, &socket) {
+        warn(&format!("{e:#}"));
+        warn("The app works without it, but sends no notifications.");
+    }
+
     // Before the pairing, not after: a server that will refuse the key is
     // worth knowing about before the phone is in your hand.
-    bold("4. Checking the SSH server");
+    bold("5. Checking the SSH server");
     server::fix_home_permissions(&home);
     server::check_sshd();
 
     if args.no_pair {
         set_options(&args.target, &args.pair.restrict)?;
     } else {
-        bold("5. Pairing the phone");
+        bold("6. Pairing the phone");
         pair_phone(&args.target, &args.pair)?;
     }
 
@@ -489,8 +539,90 @@ fn check(target: &TargetArgs, herdr: &HerdrArgs) -> anyhow::Result<()> {
     bridge::probe_agent_kinds(target.port);
     bold("SSH server");
     server::check_sshd();
+    bold("Notifications");
+    watch::report(&home);
     bold("Paired phones");
     devices()
+}
+
+fn push_command(command: PushCommand) -> anyhow::Result<()> {
+    let path = push::file(&sys::home()?);
+    match command {
+        PushCommand::Add {
+            secret,
+            connection,
+            name,
+        } => {
+            let secret = match secret {
+                Some(s) => s,
+                None => {
+                    let mut line = String::new();
+                    std::io::stdin().read_line(&mut line)?;
+                    line.trim().to_string()
+                }
+            };
+            push::check_secret(&secret)?;
+            let mut devices = push::load(&path)?;
+            let added = push::upsert(
+                &mut devices,
+                push::Device {
+                    secret,
+                    connection_id: connection,
+                    name,
+                },
+            );
+            push::save(&path, &devices)?;
+            info(if added {
+                "Added the phone."
+            } else {
+                "Updated the phone."
+            });
+        }
+        PushCommand::List => {
+            let devices = push::load(&path)?;
+            if devices.is_empty() {
+                info("No phone gets notifications from this machine.");
+            }
+            for device in &devices {
+                let name = if device.name.is_empty() {
+                    "(no name)"
+                } else {
+                    &device.name
+                };
+                println!("{name:<24} {}…", device.short_secret());
+            }
+        }
+        PushCommand::Remove { device, all } => {
+            let mut devices = push::load(&path)?;
+            let before = devices.len();
+            devices.retain(|d| {
+                !(all
+                    || device
+                        .as_deref()
+                        .is_some_and(|x| x == d.name || d.secret.starts_with(x)))
+            });
+            let removed = before - devices.len();
+            if removed == 0 {
+                anyhow::bail!("no phone matches. List them with: legio push list");
+            }
+            push::save(&path, &devices)?;
+            info(&format!("Removed {removed} phone(s)."));
+        }
+        PushCommand::Test => {
+            let sent = push::send_all(
+                &path,
+                &push::Relay::new(),
+                &push::Message {
+                    title: "Legio",
+                    body: &format!("Notifications from {} work.", sys::hostname()),
+                    level: push::Level::Active,
+                    pane_id: None,
+                },
+            )?;
+            info(&format!("Sent to {sent} phone(s)."));
+        }
+    }
+    Ok(())
 }
 
 fn uninstall() -> anyhow::Result<()> {
@@ -504,6 +636,13 @@ fn uninstall() -> anyhow::Result<()> {
             "Removed the units from {}.",
             bridge::unit_dir(&home).display()
         ));
+    }
+
+    bold("Removing the notification watcher");
+    watch::remove(&home);
+    let push_file = push::file(&home);
+    if std::fs::remove_file(&push_file).is_ok() {
+        info(&format!("Removed {}.", push_file.display()));
     }
 
     bold("Removing the paired phones");
