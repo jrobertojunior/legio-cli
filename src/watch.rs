@@ -289,8 +289,14 @@ pub fn ensure(home: &Path, socket: &Path, same_binary: bool) -> anyhow::Result<b
     Ok(true)
 }
 
-/// Whether the service manager has the watcher running.
+/// Whether the watcher runs. The service manager is asked first; the
+/// process list second, because `push add` runs in the app's SSH session,
+/// where a service manager may not answer for the user's own services.
 fn is_running() -> bool {
+    service_is_active() || sys::succeeds("pgrep", &["-f", "legio watch --socket"])
+}
+
+fn service_is_active() -> bool {
     if cfg!(target_os = "macos") {
         gui_target().is_ok_and(|t| sys::succeeds("launchctl", &["print", &format!("{t}/{LABEL}")]))
     } else {
