@@ -321,6 +321,38 @@ pub fn install(home: &Path, socket: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub fn is_installed(home: &Path) -> bool {
+    if cfg!(target_os = "macos") {
+        agent_plist(home).exists()
+    } else {
+        unit_file(home).exists()
+    }
+}
+
+/// Restarts the watcher, so it runs the binary that is on disk now. A
+/// running process keeps the old binary until it starts again.
+pub fn restart(home: &Path) -> anyhow::Result<()> {
+    let ok = if cfg!(target_os = "macos") {
+        let target = gui_target()?;
+        sys::succeeds(
+            "launchctl",
+            &["kickstart", "-k", &format!("{target}/{LABEL}")],
+        ) || sys::succeeds(
+            "launchctl",
+            &["bootstrap", &target, &agent_plist(home).to_string_lossy()],
+        )
+    } else {
+        sys::succeeds(
+            "systemctl",
+            &["--user", "restart", &format!("{UNIT_NAME}.service")],
+        )
+    };
+    if !ok {
+        bail!("could not restart the notification watcher");
+    }
+    Ok(())
+}
+
 pub fn remove(home: &Path) {
     if cfg!(target_os = "macos") {
         if let Ok(target) = gui_target() {
