@@ -59,6 +59,14 @@ echo "legio: installed $("$DIR/legio" --version 2>/dev/null || echo legio) in $D
 echo "legio: update it later with: legio update"
 
 case ":$PATH:" in
-  *":$DIR:"*) ;;
+  *":$DIR:"*)
+    # An older legio earlier in PATH (from cargo install, for example)
+    # would run in place of this one.
+    found=$(command -v legio 2>/dev/null || true)
+    if [ -n "$found" ] && [ "$found" != "$DIR/legio" ]; then
+      echo "legio: WARNING: 'legio' runs $found, not $DIR/legio." >&2
+      echo "legio: remove $found, or put $DIR first in your PATH." >&2
+    fi
+    ;;
   *) echo "legio: add $DIR to your PATH, for example: export PATH=\"$DIR:\$PATH\"" ;;
 esac
