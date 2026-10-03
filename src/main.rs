@@ -1,9 +1,11 @@
 //! `legio` — prepare a machine so the Legio iOS app can connect,
 //! and pair phones with it.
 //!
-//! It installs the bridge to Herdr's socket as systemd user units on Linux,
-//! or as a LaunchAgent on a Mac, checks the SSH server, and pairs phones. A phone makes its own key and sends
-//! only the public half. See `pairing.rs`.
+//! `legio pair` does all of it: it installs the bridge to Herdr's socket
+//! (systemd user units on Linux, a LaunchAgent on a Mac) and the
+//! notification watcher, checks the SSH server, and pairs the phone. The
+//! phone makes its own key and sends only the public half, with its push
+//! secret beside it. See `pairing.rs`.
 
 mod authorized_keys;
 mod bridge;
@@ -33,7 +35,7 @@ use crate::ui::{bold, info, warn};
 
 /// Prepare this machine for the Legio app, and pair phones with it.
 ///
-/// With no command, runs `setup`: the bridge, the checks, and one pairing.
+/// With no command, runs `pair`.
 #[derive(Parser)]
 #[command(name = "legio", version, args_conflicts_with_subcommands = true)]
 struct Cli {
@@ -45,15 +47,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Install the bridge, check the SSH server, and pair a phone.
+    /// Pair a phone, and set this machine up for it: the Herdr bridge,
+    /// notifications, and a check of the SSH server. Safe to run again.
+    Pair(SetupArgs),
+    /// The same as `pair`. The name of earlier versions.
+    #[command(hide = true)]
     Setup(SetupArgs),
-    /// Pair a phone only. Works on any machine with sshd, systemd or not.
-    Pair {
-        #[command(flatten)]
-        bridge: TargetArgs,
-        #[command(flatten)]
-        pair: PairArgs,
-    },
     /// List the phones paired with this machine.
     Devices,
     /// Remove a paired phone's key.
@@ -102,7 +101,7 @@ enum Command {
         from: String,
     },
     /// Send a push to the phones when an agent needs input or finishes.
-    /// `setup` installs this as a service; you do not run it by hand.
+    /// `pair` installs this as a service; you do not run it by hand.
     Watch {
         #[command(flatten)]
         herdr: HerdrArgs,
@@ -114,7 +113,9 @@ enum Command {
 
 #[derive(Subcommand)]
 enum PushCommand {
-    /// Add a phone. The app runs this when it connects.
+    /// Add a phone, and start the watcher if it does not run. The app runs
+    /// this each time it connects.
+    #[command(hide = true)]
     Add {
         /// The device secret the relay gave the phone. Read from stdin
         /// when left out, so it does not show in the process list.
@@ -204,16 +205,15 @@ struct SetupArgs {
     /// connection, instead of one socat that always runs.
     #[arg(long)]
     on_demand: bool,
-    /// Install the bridge and run the checks, but pair no phone.
+    /// Set the machine up and run the checks, but pair no phone.
     #[arg(long)]
     no_pair: bool,
 }
 
 fn main() {
     let cli = Cli::parse();
-    let result = match cli.command.unwrap_or(Command::Setup(cli.setup)) {
-        Command::Setup(args) => setup(args),
-        Command::Pair { bridge, pair } => pair_phone(&bridge, &pair),
+    let result = match cli.command.unwrap_or(Command::Pair(cli.setup)) {
+        Command::Pair(args) | Command::Setup(args) => setup(args),
         Command::Devices => devices(),
         Command::Unpair { device, all } => unpair(device.as_deref(), all),
         Command::Options { bridge, restrict } => set_options(&bridge, &restrict).map(|_| ()),
@@ -243,35 +243,35 @@ fn socket_path(herdr: &HerdrArgs) -> anyhow::Result<PathBuf> {
 
 fn setup(args: SetupArgs) -> anyhow::Result<()> {
     let home = sys::home()?;
-    let user = sys::user()?;
-    let port = args.target.port;
     let herdr = &args.pair.herdr;
     let socket = socket_path(herdr)?;
 
-    if cfg!(target_os = "macos") {
-        mac::install(port, &socket, &herdr.session, args.on_demand)?;
+    // Each step that fails is a warning, not the end: the pairing is what
+    // the person came for, and a terminal over SSH works without the rest.
+    let watching = if watch::herdr_here(&home, &socket) {
+        if let Err(e) = install_bridge(&args, &home, &socket) {
+            warn(&format!("{e:#}"));
+            warn("The app opens terminals here, but its dashboard needs the bridge.");
+            warn("Fix this, then run legio pair again.");
+        }
+        // The bridge carries the app while it is open. The watcher is what
+        // reaches the phone when it is not.
+        bold("4. Installing the notification watcher");
+        match watch::ensure(&home, &socket, true) {
+            Ok(_) => true,
+            Err(e) => {
+                warn(&format!("{e:#}"));
+                warn("The app works without it, but sends no notifications.");
+                false
+            }
+        }
     } else {
-        bold("1. Choosing the proxy");
-        bridge::require_systemd()?;
-        let proxy = bridge::choose_proxy(args.use_socat)?;
-        bridge::report_herdr(&herdr.session);
-
-        bold("2. Checking the Herdr socket");
-        bridge::report_socket(&socket);
-
-        bold("3. Installing the systemd user units");
-        bridge::ensure_linger(&user);
-        bridge::install_units(&home, &proxy, port, &socket)?;
-        bridge::probe_agent_kinds(port);
-    }
-
-    // The bridge carries the app while it is open. The watcher is what
-    // reaches the phone when it is not.
-    bold("4. Installing the notification watcher");
-    if let Err(e) = watch::install(&home, &socket) {
-        warn(&format!("{e:#}"));
-        warn("The app works without it, but sends no notifications.");
-    }
+        bold("1-4. Looking for Herdr");
+        info("Herdr is not on this machine, so there is no bridge to install and");
+        info("no agent to watch. The app opens terminals here over SSH.");
+        info("Install Herdr and run legio pair again for the dashboard and notifications.");
+        false
+    };
 
     // Before the pairing, not after: a server that will refuse the key is
     // worth knowing about before the phone is in your hand.
@@ -283,25 +283,124 @@ fn setup(args: SetupArgs) -> anyhow::Result<()> {
         set_options(&args.target, &args.pair.restrict)?;
     } else {
         bold("6. Pairing the phone");
-        pair_phone(&args.target, &args.pair)?;
+        let paired = pair_phone(&args.target, &args.pair)?;
+        bold("7. Turning on notifications");
+        enable_push(&home, &paired, watching);
     }
 
     println!();
     bold("Done.");
-    if cfg!(target_os = "macos") {
-        info(&format!(
-            "Read the proxy log with: cat {}",
-            mac::log_file(&home).display()
-        ));
-    } else {
-        info(&format!(
-            "Read the proxy log with: journalctl --user -u {} -f",
-            bridge::UNIT_NAME
-        ));
-    }
     info("Pair another phone with: legio pair");
+    info("Check this machine with: legio check");
     info("Remove everything with: legio uninstall");
     Ok(())
+}
+
+/// Steps 1 to 3: the bridge to Herdr's socket. Left alone when it is
+/// installed and answers, so a second `legio pair` does not drop the
+/// phones that are connected through it — unless a flag asks for another
+/// proxy.
+fn install_bridge(
+    args: &SetupArgs,
+    home: &std::path::Path,
+    socket: &std::path::Path,
+) -> anyhow::Result<()> {
+    let port = args.target.port;
+    let herdr = &args.pair.herdr;
+    let asks_for_change = args.use_socat || args.on_demand;
+    if !asks_for_change && bridge::is_installed(home) && bridge::answers(port) {
+        bold("1-3. Checking the Herdr bridge");
+        info(&format!(
+            "The bridge is installed and answers on 127.0.0.1:{port}."
+        ));
+        bridge::report_herdr(&herdr.session);
+        bridge::report_socket(socket);
+        if !cfg!(target_os = "macos") {
+            // The watcher is a user unit too, and stops at logout without it.
+            bridge::ensure_linger(&sys::user()?);
+        }
+        bridge::probe_agent_kinds(port);
+        return Ok(());
+    }
+
+    if cfg!(target_os = "macos") {
+        // The script prints steps 1 to 3 itself.
+        return mac::install(port, socket, &herdr.session, args.on_demand);
+    }
+    bold("1. Choosing the proxy");
+    bridge::require_systemd()?;
+    let proxy = bridge::choose_proxy(args.use_socat)?;
+    bridge::report_herdr(&herdr.session);
+
+    bold("2. Checking the Herdr socket");
+    bridge::report_socket(socket);
+
+    bold("3. Installing the systemd user units");
+    bridge::ensure_linger(&sys::user()?);
+    bridge::install_units(home, &proxy, port, socket)?;
+    bridge::probe_agent_kinds(port);
+    Ok(())
+}
+
+/// Saves the push secret the phone sent with its key, and sends it a first
+/// notification, so the person sees at once that it works.
+fn enable_push(home: &std::path::Path, paired: &pairing::Paired, watching: bool) {
+    let grant = match &paired.push {
+        None => {
+            info("The phone sent no push secret: notifications are off in the app.");
+            info("Turn them on in the iPhone's Settings -> Legio -> Notifications.");
+            info("The app gives this machine the secret the next time it connects.");
+            return;
+        }
+        Some(Err(e)) => {
+            warn(&format!("{e:#}"));
+            warn("The phone is paired, but its push secret could not be read.");
+            warn("The app gives this machine the secret again the next time it connects.");
+            return;
+        }
+        Some(Ok(grant)) => grant,
+    };
+    let device = push::Device {
+        secret: grant.secret.clone(),
+        connection_id: grant.connection_id.clone(),
+        name: paired.device.clone(),
+    };
+    let path = push::file(home);
+    let saved = push::load(&path).and_then(|mut devices| {
+        push::upsert(&mut devices, device.clone());
+        push::save(&path, &devices)
+    });
+    if let Err(e) = saved {
+        warn(&format!("{e:#}"));
+        warn("The phone is paired, but this machine sends it no notifications.");
+        return;
+    }
+    if !watching {
+        info(&format!("Saved {}'s push secret.", paired.device));
+        info("This machine runs no notification watcher, so it sends nothing yet.");
+        return;
+    }
+    let message = push::Message {
+        title: "Legio",
+        body: &format!("Notifications from {} are on.", sys::hostname()),
+        level: push::Level::Active,
+        pane_id: None,
+    };
+    match push::Relay::new().send(&device, &message) {
+        Ok(push::Sent::Ok) => {
+            info(&format!("Notifications are on for {}.", paired.device));
+            info("A test notification is on its way to the phone.");
+        }
+        Ok(push::Sent::Gone) => {
+            warn(
+                "The relay does not know this phone. Open the app once, then run legio pair again.",
+            );
+        }
+        Err(e) => {
+            warn(&format!("{e:#}"));
+            warn("The secret is saved. Send a test later with: legio push test");
+        }
+    }
 }
 
 /// Writes the key the listener was handed, after the person said yes.
@@ -359,7 +458,7 @@ impl Host for Installer {
     }
 }
 
-fn pair_phone(target: &TargetArgs, args: &PairArgs) -> anyhow::Result<()> {
+fn pair_phone(target: &TargetArgs, args: &PairArgs) -> anyhow::Result<pairing::Paired> {
     let home = sys::home()?;
     // The options first, so a --forward-port given with a new pairing also
     // reaches the phones that are already paired.
@@ -440,12 +539,12 @@ fn pair_phone(target: &TargetArgs, args: &PairArgs) -> anyhow::Result<()> {
     drop(listener);
 
     println!();
-    bold(&format!(
+    info(&format!(
         "Paired {} ({}).",
         paired.device,
         paired.key.phrase()
     ));
-    Ok(())
+    Ok(paired)
 }
 
 /// Rewrites what every paired phone may do, when it differs from what was
@@ -530,7 +629,7 @@ fn check(target: &TargetArgs, herdr: &HerdrArgs) -> anyhow::Result<()> {
     } else {
         match bridge::installed_unit(&home) {
             Some(unit) => bridge::report_unit(&unit, target.port),
-            None => warn("No bridge unit is installed. Run: legio setup"),
+            None => warn("No bridge unit is installed. Run: legio pair"),
         }
     }
     bold("Herdr");
@@ -577,6 +676,16 @@ fn push_command(command: PushCommand) -> anyhow::Result<()> {
             } else {
                 "Updated the phone."
             });
+            // The app runs this on each connect, so this is also what
+            // brings back a watcher that stopped, or was never installed
+            // on a machine paired by an older legio.
+            let home = sys::home()?;
+            let socket = watch::installed_socket(&home)
+                .unwrap_or_else(|| home.join(".config/herdr/herdr.sock"));
+            if watch::herdr_here(&home, &socket) {
+                watch::ensure(&home, &socket, false)
+                    .context("the notification watcher does not run")?;
+            }
         }
         PushCommand::List => {
             let devices = push::load(&path)?;

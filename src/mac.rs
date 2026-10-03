@@ -61,7 +61,7 @@ pub fn uninstall() -> anyhow::Result<()> {
 pub fn report_agent(home: &Path, target_port: u16) {
     let plist = agent_plist(home);
     if !plist.exists() {
-        warn("No bridge LaunchAgent is installed. Run: legio setup");
+        warn("No bridge LaunchAgent is installed. Run: legio pair");
         return;
     }
     info(&format!("LaunchAgent: {}", plist.display()));

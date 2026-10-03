@@ -40,9 +40,7 @@ pub fn unit_dir(home: &Path) -> PathBuf {
 
 pub fn require_systemd() -> anyhow::Result<()> {
     if !Path::new("/run/systemd/system").is_dir() || sys::which("systemctl").is_none() {
-        bail!(
-            "systemd is not running. The bridge needs systemd (a Linux server). `legio pair` works without it"
-        );
+        bail!("systemd is not running. The bridge needs systemd (a Linux server)");
     }
     Ok(())
 }
@@ -195,6 +193,22 @@ pub fn report_unit(unit: &str, target_port: u16) {
         warn(&format!("{unit} is not active. Read the log with:"));
         warn(&format!("  systemctl --user status {unit}"));
     }
+}
+
+/// Whether a bridge is installed: the systemd units, or the LaunchAgent on
+/// a Mac.
+pub fn is_installed(home: &Path) -> bool {
+    if cfg!(target_os = "macos") {
+        crate::mac::agent_plist(home).exists()
+    } else {
+        installed_unit(home).is_some()
+    }
+}
+
+/// Whether something listens on the bridge port.
+pub fn answers(target_port: u16) -> bool {
+    let addr = SocketAddr::from(([127, 0, 0, 1], target_port));
+    TcpStream::connect_timeout(&addr, Duration::from_secs(1)).is_ok()
 }
 
 /// The unit that runs the bridge now, if any.

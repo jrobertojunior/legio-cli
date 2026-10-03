@@ -254,8 +254,60 @@ fn gui_target() -> anyhow::Result<String> {
     Ok(format!("gui/{uid}"))
 }
 
+/// Whether this machine runs Herdr, or did: the watcher has nothing to
+/// read anywhere else. The socket exists only while the server runs, so the
+/// binary, its config folder and an installed bridge count too.
+pub fn herdr_here(home: &Path, socket: &Path) -> bool {
+    socket.exists()
+        || sys::which("herdr").is_some()
+        || home.join(".config/herdr").is_dir()
+        || crate::bridge::is_installed(home)
+}
+
+/// Installs the watcher unless it already runs on `socket`. With
+/// `same_binary`, a watcher that runs another `legio` binary is written
+/// again too — `legio pair` asks for that, so a watcher left on a build
+/// folder or an old place moves to the binary that ran it.
+///
+/// Returns whether it wrote the service.
+pub fn ensure(home: &Path, socket: &Path, same_binary: bool) -> anyhow::Result<bool> {
+    let args = service_args(home);
+    let socket_same = args
+        .as_deref()
+        .and_then(socket_in_args)
+        .is_some_and(|s| s == socket);
+    let binary_same = !same_binary
+        || args
+            .as_deref()
+            .and_then(|a| a.first())
+            .is_some_and(|b| exe().is_ok_and(|exe| Path::new(b) == exe));
+    if socket_same && binary_same && is_running() {
+        info("The notification watcher is already running.");
+        return Ok(false);
+    }
+    install(home, socket)?;
+    Ok(true)
+}
+
+/// Whether the service manager has the watcher running.
+fn is_running() -> bool {
+    if cfg!(target_os = "macos") {
+        gui_target().is_ok_and(|t| sys::succeeds("launchctl", &["print", &format!("{t}/{LABEL}")]))
+    } else {
+        sys::succeeds(
+            "systemctl",
+            &[
+                "--user",
+                "is-active",
+                "--quiet",
+                &format!("{UNIT_NAME}.service"),
+            ],
+        )
+    }
+}
+
 /// Writes the service that runs `legio watch` and starts it. It runs this
-/// same binary, so move or reinstall legio and run `legio setup` again.
+/// same binary, so move or reinstall legio and run `legio pair` again.
 pub fn install(home: &Path, socket: &Path) -> anyhow::Result<()> {
     let exe = exe()?;
     if cfg!(target_os = "macos") {
@@ -331,34 +383,50 @@ pub fn is_installed(home: &Path) -> bool {
 
 /// The socket the installed watcher reads, from its service file.
 pub fn installed_socket(home: &Path) -> Option<PathBuf> {
+    socket_in_args(&service_args(home)?)
+}
+
+/// The command line in the installed service file: the binary first.
+fn service_args(home: &Path) -> Option<Vec<String>> {
     if cfg!(target_os = "macos") {
-        socket_in_plist(&std::fs::read_to_string(agent_plist(home)).ok()?)
+        Some(args_in_plist(
+            &std::fs::read_to_string(agent_plist(home)).ok()?,
+        ))
     } else {
-        socket_in_unit(&std::fs::read_to_string(unit_file(home)).ok()?)
+        args_in_unit(&std::fs::read_to_string(unit_file(home)).ok()?)
     }
 }
 
-fn socket_in_plist(plist: &str) -> Option<PathBuf> {
-    let strings: Vec<&str> = plist
+fn socket_in_args(args: &[String]) -> Option<PathBuf> {
+    let at = args.iter().position(|a| a == "--socket")?;
+    args.get(at + 1).map(PathBuf::from)
+}
+
+/// The strings of the plist, which are the label first and then the
+/// program's arguments — the label is dropped.
+fn args_in_plist(plist: &str) -> Vec<String> {
+    let Some(array) = plist
+        .split("<key>ProgramArguments</key>")
+        .nth(1)
+        .and_then(|rest| rest.split("</array>").next())
+    else {
+        return Vec::new();
+    };
+    array
         .split("<string>")
         .skip(1)
         .filter_map(|part| part.split("</string>").next())
-        .collect();
-    let at = strings.iter().position(|s| *s == "--socket")?;
-    let socket = strings.get(at + 1)?;
-    Some(PathBuf::from(
-        socket
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&amp;", "&"),
-    ))
+        .map(|text| {
+            text.replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&amp;", "&")
+        })
+        .collect()
 }
 
-fn socket_in_unit(unit: &str) -> Option<PathBuf> {
+fn args_in_unit(unit: &str) -> Option<Vec<String>> {
     let exec = unit.lines().find_map(|l| l.strip_prefix("ExecStart="))?;
-    let mut words = exec.split_whitespace();
-    words.find(|w| *w == "--socket")?;
-    words.next().map(PathBuf::from)
+    Some(exec.split_whitespace().map(str::to_string).collect())
 }
 
 pub fn remove(home: &Path) {
@@ -379,7 +447,7 @@ pub fn remove(home: &Path) {
 pub fn report(home: &Path) {
     if cfg!(target_os = "macos") {
         if !agent_plist(home).exists() {
-            warn("The notification watcher is not installed. Run: legio setup");
+            warn("The notification watcher is not installed. Run: legio pair");
         } else if gui_target()
             .is_ok_and(|t| sys::succeeds("launchctl", &["print", &format!("{t}/{LABEL}")]))
         {
@@ -389,11 +457,11 @@ pub fn report(home: &Path) {
             ));
         } else {
             warn(&format!(
-                "{LABEL} is installed but not loaded. Run: legio setup"
+                "{LABEL} is installed but not loaded. Run: legio pair"
             ));
         }
     } else if !unit_file(home).exists() {
-        warn("The notification watcher is not installed. Run: legio setup");
+        warn("The notification watcher is not installed. Run: legio pair");
     } else if sys::succeeds(
         "systemctl",
         &[
@@ -412,7 +480,7 @@ pub fn report(home: &Path) {
     }
     match push::load(&push::file(home)) {
         Ok(devices) if devices.is_empty() => {
-            info("No phone has asked for notifications yet. The app does it when it connects.")
+            info("No phone gets notifications yet. Pair one with: legio pair")
         }
         Ok(devices) => info(&format!(
             "Sends to {} phone(s) through {}.",
@@ -445,20 +513,26 @@ mod tests {
     }
 
     #[test]
-    fn reads_the_socket_from_the_service_files() {
-        let plist = "<array>\n<string>/old/legio</string>\n<string>watch</string>\n\
-                     <string>--socket</string>\n<string>/home/a &amp; b/herdr.sock</string>\n</array>";
+    fn reads_the_command_line_from_the_service_files() {
+        let plist = "<key>Label</key>\n<string>com.legio.watch</string>\n\
+                     <key>ProgramArguments</key>\n<array>\n<string>/old/legio</string>\n<string>watch</string>\n\
+                     <string>--socket</string>\n<string>/home/a &amp; b/herdr.sock</string>\n</array>\n\
+                     <key>StandardOutPath</key>\n<string>/tmp/log</string>";
+        let args = args_in_plist(plist);
+        assert_eq!(args[0], "/old/legio");
         assert_eq!(
-            socket_in_plist(plist),
+            socket_in_args(&args),
             Some(PathBuf::from("/home/a & b/herdr.sock"))
         );
         let unit = "[Service]\nExecStart=/old/legio watch --socket /home/u/.config/herdr/herdr.sock\nRestart=always\n";
+        let args = args_in_unit(unit).unwrap();
+        assert_eq!(args[0], "/old/legio");
         assert_eq!(
-            socket_in_unit(unit),
+            socket_in_args(&args),
             Some(PathBuf::from("/home/u/.config/herdr/herdr.sock"))
         );
         assert_eq!(
-            socket_in_unit("[Service]\nExecStart=/old/legio watch\n"),
+            socket_in_args(&args_in_unit("[Service]\nExecStart=/old/legio watch\n").unwrap()),
             None
         );
     }
