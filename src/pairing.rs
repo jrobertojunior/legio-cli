@@ -625,4 +625,3 @@ mod tests {
         assert!(statuses[0].contains("401"));
     }
 }
-
