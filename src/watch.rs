@@ -103,24 +103,45 @@ fn parse_agents(snapshot: &serde_json::Value) -> Vec<Agent> {
 /// The moment one agent asked for a person: its status and when it began.
 type Key = (String, Option<u64>);
 
+/// An agent that turned `blocked` or `done`, and how long its task ran.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Moment {
+    pub agent: Agent,
+    /// From the start of the task to this status. `None` when the watcher
+    /// did not see the task start, or Herdr gave no times.
+    pub worked: Option<Duration>,
+}
+
 /// Finds the agents that turned `blocked` or `done`.
 ///
 /// An agent must show the same status in two snapshots in a row before it
 /// counts: an agent that blocks for a moment and goes on by itself is not
 /// worth a phone in your hand. Each moment is sent once.
+///
+/// It also times each task. A task starts when an agent turns `working`
+/// from any status but `blocked`, and a block in the middle does not end
+/// it: the answer you gave on the phone is part of the same task.
 #[derive(Default)]
 pub struct Detector {
     last: HashMap<String, Key>,
     sent: HashMap<String, Key>,
+    task_start: HashMap<String, u64>,
     started: bool,
 }
 
 impl Detector {
-    pub fn next(&mut self, agents: &[Agent]) -> Vec<Agent> {
+    pub fn next(&mut self, agents: &[Agent]) -> Vec<Moment> {
         let mut out = Vec::new();
         let mut now = HashMap::new();
         for agent in agents {
             let key = (agent.status.clone(), agent.since);
+            let previous = self.last.get(&agent.pane_id).map(|(s, _)| s.as_str());
+            if agent.status == "working" && !matches!(previous, Some("working" | "blocked")) {
+                match agent.since {
+                    Some(since) => self.task_start.insert(agent.pane_id.clone(), since),
+                    None => self.task_start.remove(&agent.pane_id),
+                };
+            }
             let wants_person = matches!(agent.status.as_str(), "blocked" | "done");
             if wants_person {
                 if !self.started {
@@ -131,13 +152,23 @@ impl Detector {
                     && self.sent.get(&agent.pane_id) != Some(&key)
                 {
                     self.sent.insert(agent.pane_id.clone(), key.clone());
-                    out.push(agent.clone());
+                    let worked = match (self.task_start.get(&agent.pane_id), agent.since) {
+                        (Some(&start), Some(end)) => {
+                            Some(Duration::from_millis(end.saturating_sub(start)))
+                        }
+                        _ => None,
+                    };
+                    out.push(Moment {
+                        agent: agent.clone(),
+                        worked,
+                    });
                 }
             }
             now.insert(agent.pane_id.clone(), key);
         }
         // A closed pane leaves nothing to remember.
         self.sent.retain(|pane, _| now.contains_key(pane));
+        self.task_start.retain(|pane, _| now.contains_key(pane));
         self.last = now;
         self.started = true;
         out
@@ -207,8 +238,10 @@ pub fn run(socket: &Path, home: &Path) -> anyhow::Result<()> {
                 continue;
             }
         };
-        for agent in detector.next(&agents) {
+        for Moment { agent, worked } in detector.next(&agents) {
             let (title, body, level) = message(&agent);
+            // The relay holds each phone's rules, and drops what they do
+            // not allow.
             let sent = push::send_all(
                 &devices,
                 &relay,
@@ -217,11 +250,14 @@ pub fn run(socket: &Path, home: &Path) -> anyhow::Result<()> {
                     body: &body,
                     level,
                     pane_id: Some(&agent.pane_id),
+                    status: Some(&agent.status),
+                    worked,
                 },
             );
+            let worked = worked.map_or("unknown".to_string(), |w| format!("{}s", w.as_secs()));
             match sent {
                 Ok(n) => eprintln!(
-                    "legio watch: {title} ({}), sent to {n} phone(s).",
+                    "legio watch: {title} ({}, worked {worked}), sent to {n} phone(s).",
                     agent.pane_id
                 ),
                 Err(e) => eprintln!("legio watch: {e:#}"),
@@ -566,6 +602,34 @@ mod tests {
         d.next(&[agent("p1", "blocked", 2)]);
         assert!(d.next(&[agent("p1", "working", 3)]).is_empty());
         assert!(d.next(&[agent("p1", "working", 3)]).is_empty());
+    }
+
+    #[test]
+    fn times_the_task_through_a_block() {
+        let mut d = Detector::default();
+        d.next(&[agent("p1", "idle", 0)]);
+        d.next(&[agent("p1", "working", 1_000)]);
+        d.next(&[agent("p1", "blocked", 61_000)]);
+        let blocked = d.next(&[agent("p1", "blocked", 61_000)]);
+        assert_eq!(blocked[0].worked, Some(Duration::from_secs(60)));
+        d.next(&[agent("p1", "working", 90_000)]);
+        d.next(&[agent("p1", "done", 181_000)]);
+        let done = d.next(&[agent("p1", "done", 181_000)]);
+        assert_eq!(done[0].worked, Some(Duration::from_secs(180)));
+        // The next task starts its own clock.
+        d.next(&[agent("p1", "working", 200_000)]);
+        d.next(&[agent("p1", "done", 210_000)]);
+        let done = d.next(&[agent("p1", "done", 210_000)]);
+        assert_eq!(done[0].worked, Some(Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn a_task_the_watcher_did_not_see_start_has_no_time() {
+        let mut d = Detector::default();
+        d.next(&[agent("p1", "blocked", 1)]);
+        d.next(&[agent("p1", "blocked", 1)]);
+        d.next(&[agent("p1", "done", 2)]);
+        assert_eq!(d.next(&[agent("p1", "done", 2)])[0].worked, None);
     }
 
     #[test]

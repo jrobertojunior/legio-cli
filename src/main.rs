@@ -385,9 +385,12 @@ fn enable_push(home: &std::path::Path, paired: &pairing::Paired, watching: bool)
         body: &format!("Notifications from {} are on.", sys::hostname()),
         level: push::Level::Active,
         pane_id: None,
+        status: None,
+        worked: None,
     };
     match push::Relay::new().send(&device, &message) {
-        Ok(push::Sent::Ok) => {
+        // A push with no status is never kept back by the rules.
+        Ok(push::Sent::Ok | push::Sent::Skipped) => {
             info(&format!("Notifications are on for {}.", paired.device));
             info("A test notification is on its way to the phone.");
         }
@@ -726,6 +729,8 @@ fn push_command(command: PushCommand) -> anyhow::Result<()> {
                     body: &format!("Notifications from {} work.", sys::hostname()),
                     level: push::Level::Active,
                     pane_id: None,
+                    status: None,
+                    worked: None,
                 },
             )?;
             info(&format!("Sent to {sent} phone(s)."));

@@ -126,12 +126,20 @@ pub struct Message<'a> {
     pub body: &'a str,
     pub level: Level,
     pub pane_id: Option<&'a str>,
+    /// The agent status the push is about: `blocked` or `done`. The relay
+    /// holds each phone's rules, and drops a push they do not allow. A
+    /// push with no status — a test — always goes.
+    pub status: Option<&'a str>,
+    /// How long the agent's task ran, for the rules' minimum work time.
+    pub worked: Option<Duration>,
 }
 
 /// What the relay said about one phone.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Sent {
     Ok,
+    /// The phone's rules do not allow this push. Nothing to do.
+    Skipped,
     /// The relay does not know the secret, or the phone is gone. Forget it.
     Gone,
 }
@@ -164,6 +172,12 @@ impl Relay {
         if let Some(pane) = message.pane_id {
             body["paneId"] = pane.into();
         }
+        if let Some(status) = message.status {
+            body["status"] = status.into();
+        }
+        if let Some(worked) = message.worked {
+            body["workedSeconds"] = worked.as_secs().into();
+        }
         let mut response = self
             .agent
             .post(format!("{}/v1/notify", self.url))
@@ -171,7 +185,17 @@ impl Relay {
             .send_json(&body)
             .with_context(|| format!("could not reach the relay at {}", self.url))?;
         match response.status().as_u16() {
-            204 | 200 => Ok(Sent::Ok),
+            204 => Ok(Sent::Ok),
+            // A relay that kept the push back says so in the body. An older
+            // relay answers 200 only for a push it sent.
+            200 => {
+                let reply: serde_json::Value = response.body_mut().read_json().unwrap_or_default();
+                Ok(if reply["sent"] == false {
+                    Sent::Skipped
+                } else {
+                    Sent::Ok
+                })
+            }
             410 => Ok(Sent::Gone),
             status => {
                 let text = response.body_mut().read_to_string().unwrap_or_default();
@@ -189,6 +213,7 @@ pub fn send_all(path: &Path, relay: &Relay, message: &Message) -> anyhow::Result
     for device in load(path)? {
         match relay.send(&device, message) {
             Ok(Sent::Ok) => sent += 1,
+            Ok(Sent::Skipped) => {}
             Ok(Sent::Gone) => {
                 eprintln!(
                     "legio: the relay no longer knows {} ({}). Removed it.",

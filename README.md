@@ -164,6 +164,13 @@ snapshots, it sends a push to each phone in
 | `blocked` | "Claude needs input" | time-sensitive |
 | `done` | "Claude finished" | active |
 
+Each push also carries the agent status and the work time of the task.
+The watcher times each task, from the moment the agent starts `working` to
+the moment it blocks or finishes. A block in the middle does not start a
+new task. The relay keeps each phone's notification rules, which you set in
+the app, and drops the pushes that the rules do not allow. This machine
+keeps no rules.
+
 The push goes through the relay at `https://legiorelay.jrobe.cloud`
 ([`legio-relay`](https://github.com/jrobertojunior/legio-relay)). The relay
 holds the APNs key. This machine holds only one device secret for each
