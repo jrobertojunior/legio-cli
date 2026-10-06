@@ -29,7 +29,7 @@ key, and only the public half leaves the phone.
 | `host`, `port`, `user` | The SSH login. |
 | `targetPort` | The bridge port on 127.0.0.1. |
 | `session` | The Herdr session the app attaches panes from. |
-| `hostKey` | The SHA-256 fingerprint of the server's **ed25519** host key, in `ssh-keygen -l` form. Optional: it is left out when the server has no ed25519 host key. When it is present, the app must refuse an SSH server whose host key does not match. |
+| `hostKey` | The SHA-256 fingerprint of the server's **ed25519** host key, in `ssh-keygen -l` form. Optional: it is left out when the server has no ed25519 host key. When it is present, the app must refuse an SSH server whose host key does not match. When it is absent, the app saves the key it meets on the first login and refuses a different key after that. |
 | `pairPort` | The TCP port on `host` that takes the public key. |
 | `token` | A one-time secret: 32 random bytes, base64url without padding. |
 
