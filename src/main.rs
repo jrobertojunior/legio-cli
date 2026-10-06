@@ -385,6 +385,7 @@ fn enable_push(home: &std::path::Path, paired: &pairing::Paired, watching: bool)
         body: &format!("Notifications from {} are on.", sys::hostname()),
         level: push::Level::Active,
         pane_id: None,
+        agent: None,
         status: None,
         worked: None,
     };
@@ -729,6 +730,7 @@ fn push_command(command: PushCommand) -> anyhow::Result<()> {
                     body: &format!("Notifications from {} work.", sys::hostname()),
                     level: push::Level::Active,
                     pane_id: None,
+                    agent: None,
                     status: None,
                     worked: None,
                 },

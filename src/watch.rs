@@ -250,6 +250,7 @@ pub fn run(socket: &Path, home: &Path) -> anyhow::Result<()> {
                     body: &body,
                     level,
                     pane_id: Some(&agent.pane_id),
+                    agent: Some(&agent.agent),
                     status: Some(&agent.status),
                     worked,
                 },
