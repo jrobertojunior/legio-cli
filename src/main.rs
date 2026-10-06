@@ -114,12 +114,11 @@ enum Command {
 #[derive(Subcommand)]
 enum PushCommand {
     /// Add a phone, and start the watcher if it does not run. The app runs
-    /// this each time it connects.
+    /// this each time it connects. The device secret the relay gave the
+    /// phone comes on stdin, never as an argument: any user on the machine
+    /// can read a process's arguments.
     #[command(hide = true)]
     Add {
-        /// The device secret the relay gave the phone. Read from stdin
-        /// when left out, so it does not show in the process list.
-        secret: Option<String>,
         /// The app's id for its connection to this machine.
         #[arg(long)]
         connection: String,
@@ -472,8 +471,9 @@ fn pair_phone(target: &TargetArgs, args: &PairArgs) -> anyhow::Result<pairing::P
     address.report();
     let host_key = server::host_key_fingerprint();
     if host_key.is_none() {
-        warn("Could not read /etc/ssh/ssh_host_ed25519_key.pub. The app will not be");
-        warn("able to check that it is talking to this machine.");
+        warn("Could not read /etc/ssh/ssh_host_ed25519_key.pub, so the code holds no");
+        warn("host key. The app trusts the key it meets on the first connect. To put");
+        warn("the key in the code, make one with: sudo ssh-keygen -A");
     }
 
     let token = pairing::new_token()?;
@@ -641,6 +641,7 @@ fn check(target: &TargetArgs, herdr: &HerdrArgs) -> anyhow::Result<()> {
     bridge::report_socket(&socket_path(herdr)?);
     bridge::probe_agent_kinds(target.port);
     bold("SSH server");
+    server::report_host_key();
     server::check_sshd();
     bold("Notifications");
     watch::report(&home);
@@ -651,19 +652,10 @@ fn check(target: &TargetArgs, herdr: &HerdrArgs) -> anyhow::Result<()> {
 fn push_command(command: PushCommand) -> anyhow::Result<()> {
     let path = push::file(&sys::home()?);
     match command {
-        PushCommand::Add {
-            secret,
-            connection,
-            name,
-        } => {
-            let secret = match secret {
-                Some(s) => s,
-                None => {
-                    let mut line = String::new();
-                    std::io::stdin().read_line(&mut line)?;
-                    line.trim().to_string()
-                }
-            };
+        PushCommand::Add { connection, name } => {
+            let mut line = String::new();
+            std::io::stdin().read_line(&mut line)?;
+            let secret = line.trim().to_string();
             push::check_secret(&secret)?;
             let mut devices = push::load(&path)?;
             let added = push::upsert(

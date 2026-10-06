@@ -135,6 +135,15 @@ pub fn host_key_fingerprint() -> Option<String> {
     sshkey::fingerprint_of_blob(blob).ok()
 }
 
+/// Prints the host key fingerprint, so it can be compared with the one the
+/// app shows in the connection editor.
+pub fn report_host_key() {
+    match host_key_fingerprint() {
+        Some(fingerprint) => info(&format!("Host key: {fingerprint} (ED25519)")),
+        None => warn("No ed25519 host key. Make one with: sudo ssh-keygen -A"),
+    }
+}
+
 /// sshd refuses every key in a home directory that the group or others can
 /// write to, and says so only in its own log. Take the permission away
 /// before it costs an hour.
