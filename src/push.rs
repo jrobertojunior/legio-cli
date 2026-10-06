@@ -126,6 +126,9 @@ pub struct Message<'a> {
     pub body: &'a str,
     pub level: Level,
     pub pane_id: Option<&'a str>,
+    /// The harness Herdr detected in the pane: `claude`, `codex`, … The
+    /// phone shows its mark next to the words.
+    pub agent: Option<&'a str>,
     /// The agent status the push is about: `blocked` or `done`. The relay
     /// holds each phone's rules, and drops a push they do not allow. A
     /// push with no status — a test — always goes.
@@ -171,6 +174,9 @@ impl Relay {
         });
         if let Some(pane) = message.pane_id {
             body["paneId"] = pane.into();
+        }
+        if let Some(agent) = message.agent {
+            body["agent"] = agent.into();
         }
         if let Some(status) = message.status {
             body["status"] = status.into();
