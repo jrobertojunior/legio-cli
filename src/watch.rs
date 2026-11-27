@@ -4,6 +4,8 @@
 //! this machine watches for it. It reads Herdr's `session.snapshot` every
 //! few seconds over the socket and sends a push through the relay when an
 //! agent turns `blocked` (it waits for input) or `done` (it finished).
+//! It reads the herdr-core on this machine the same way, with
+//! `terminal.list` — see `crate::herdr_core`.
 //!
 //! A snapshot, not `events.subscribe`: the event that carries an agent's
 //! status, `pane.agent_status_changed`, needs a `pane_id` up front and so
@@ -18,7 +20,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, bail};
 
@@ -202,43 +204,93 @@ fn capitalized(word: &str) -> String {
 
 // MARK: - The loop
 
+/// One place agents are read from, with what the watcher remembers of it.
+/// Each has its own `Detector`: a source that restarts gives its panes
+/// again, and what was waiting in them before is not a new moment.
+struct Source {
+    name: &'static str,
+    detector: Detector,
+    down: bool,
+    retry_at: Option<Instant>,
+}
+
+impl Source {
+    fn new(name: &'static str) -> Self {
+        Source {
+            name,
+            detector: Detector::default(),
+            down: false,
+            retry_at: None,
+        }
+    }
+
+    /// Whether to read now: a source that did not answer waits `RETRY`.
+    fn due(&self) -> bool {
+        self.retry_at.is_none_or(|at| Instant::now() >= at)
+    }
+
+    /// The moments in one reading. `None` is a source that does not run
+    /// here, which is not an error: a machine can have Herdr, herdr-core,
+    /// or both.
+    fn moments(&mut self, reading: Option<anyhow::Result<Vec<Agent>>>) -> Vec<Moment> {
+        match reading {
+            None => {
+                self.detector = Detector::default();
+                Vec::new()
+            }
+            Some(Ok(agents)) => {
+                if self.down {
+                    eprintln!("legio watch: {} answers again.", self.name);
+                    self.down = false;
+                }
+                self.retry_at = None;
+                self.detector.next(&agents)
+            }
+            Some(Err(e)) => {
+                if !self.down {
+                    eprintln!(
+                        "legio watch: {}: {e:#}. Trying again every {}s.",
+                        self.name,
+                        RETRY.as_secs()
+                    );
+                    self.down = true;
+                }
+                // It restarted: its pane ids may be new, and what was
+                // waiting before is not a new moment.
+                self.detector = Detector::default();
+                self.retry_at = Some(Instant::now() + RETRY);
+                Vec::new()
+            }
+        }
+    }
+}
+
 /// Runs until killed. The service manager restarts it if it dies.
+///
+/// It reads Herdr's socket while it is there, and the herdr-core on this
+/// machine while that runs — see `crate::herdr_core`.
 pub fn run(socket: &Path, home: &Path) -> anyhow::Result<()> {
     let devices = push::file(home);
     let relay = Relay::new();
-    let mut detector = Detector::default();
-    let mut socket_down = false;
+    let mut herdr = Source::new("Herdr");
+    let mut core = Source::new("herdr-core");
+    let mut core_reader = crate::herdr_core::Reader::new(home);
     eprintln!(
-        "legio watch: reading {} every {}s, sending through {}",
+        "legio watch: reading {} and herdr-core every {}s, sending through {}",
         socket.display(),
         POLL.as_secs(),
         push::relay_url()
     );
     loop {
-        let agents = match snapshot(socket) {
-            Ok(agents) => {
-                if socket_down {
-                    eprintln!("legio watch: Herdr answers again.");
-                    socket_down = false;
-                }
-                agents
-            }
-            Err(e) => {
-                if !socket_down {
-                    eprintln!(
-                        "legio watch: {e:#}. Trying again every {}s.",
-                        RETRY.as_secs()
-                    );
-                    socket_down = true;
-                }
-                // Herdr restarted: its pane ids may be new, and what was
-                // waiting before is not a new moment.
-                detector = Detector::default();
-                std::thread::sleep(RETRY);
-                continue;
-            }
-        };
-        for Moment { agent, worked } in detector.next(&agents) {
+        let mut moments = Vec::new();
+        if herdr.due() {
+            let reading = socket.exists().then(|| snapshot(socket));
+            moments.extend(herdr.moments(reading));
+        }
+        if core.due() {
+            moments.extend(core.moments(core_reader.agents()));
+        }
+        for Moment { agent, worked } in moments {
             let (title, body, level) = message(&agent);
             // The relay holds each phone's rules, and drops what they do
             // not allow.
@@ -291,14 +343,19 @@ fn gui_target() -> anyhow::Result<String> {
     Ok(format!("gui/{uid}"))
 }
 
-/// Whether this machine runs Herdr, or did: the watcher has nothing to
-/// read anywhere else. The socket exists only while the server runs, so the
-/// binary, its config folder and an installed bridge count too.
+/// Whether this machine runs Herdr, or did. The socket exists only while
+/// the server runs, so the binary, its config folder and an installed
+/// bridge count too.
 pub fn herdr_here(home: &Path, socket: &Path) -> bool {
     socket.exists()
         || sys::which("herdr").is_some()
         || home.join(".config/herdr").is_dir()
         || crate::bridge::is_installed(home)
+}
+
+/// Whether the watcher has anything to read here: Herdr, or herdr-core.
+pub fn agents_here(home: &Path, socket: &Path) -> bool {
+    herdr_here(home, socket) || crate::herdr_core::find(home).is_some()
 }
 
 /// Installs the watcher unless it already runs on `socket`. With
@@ -392,7 +449,7 @@ pub fn install(home: &Path, socket: &Path) -> anyhow::Result<()> {
         std::fs::write(
             &unit,
             format!(
-                "[Unit]\nDescription=Push notifications for Herdr agents (Legio app)\n\
+                "[Unit]\nDescription=Push notifications for Herdr and herdr-core agents (Legio app)\n\
                  After=default.target\n\n\
                  [Service]\nExecStart={} watch --socket {}\n\
                  Restart=always\nRestartSec=5\n\n\
@@ -520,6 +577,16 @@ pub fn report(home: &Path) {
             "{UNIT_NAME}.service is not active. Read the log with:"
         ));
         warn(&format!("  journalctl --user -u {UNIT_NAME}"));
+    }
+    match crate::herdr_core::find(home) {
+        Some(binary) if crate::herdr_core::is_running(home) => {
+            info(&format!("Reads the herdr-core at {}.", binary.display()))
+        }
+        Some(binary) => info(&format!(
+            "Reads the herdr-core at {} while it runs. It does not run now.",
+            binary.display()
+        )),
+        None => {}
     }
     match push::load(&push::file(home)) {
         Ok(devices) if devices.is_empty() => {

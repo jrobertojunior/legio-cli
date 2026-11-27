@@ -239,13 +239,13 @@ pub fn after_update(from: &str) -> anyhow::Result<()> {
         // or an old place). It keeps the socket it had.
         let socket = crate::watch::installed_socket(&home).unwrap_or(default_socket);
         crate::watch::install(&home, &socket)?;
-    } else if crate::watch::herdr_here(&home, &default_socket) {
+    } else if crate::watch::agents_here(&home, &default_socket) {
         // 0.2.0 brought the watcher. A machine set up before it gets it
         // here, so the update alone turns notifications on.
         info("Installing the notification watcher.");
         crate::watch::install(&home, &default_socket)?;
     } else {
-        info("Herdr is not on this machine, so there is no agent to watch.");
+        info("Neither Herdr nor herdr-core is on this machine, so there is no agent to watch.");
     }
     Ok(())
 }

@@ -9,6 +9,7 @@
 
 mod authorized_keys;
 mod bridge;
+mod herdr_core;
 mod mac;
 mod pairing;
 mod phrase;
@@ -247,14 +248,27 @@ fn setup(args: SetupArgs) -> anyhow::Result<()> {
 
     // Each step that fails is a warning, not the end: the pairing is what
     // the person came for, and a terminal over SSH works without the rest.
-    let watching = if watch::herdr_here(&home, &socket) {
+    let herdr_here = watch::herdr_here(&home, &socket);
+    if herdr_here {
         if let Err(e) = install_bridge(&args, &home, &socket) {
             warn(&format!("{e:#}"));
             warn("The app opens terminals here, but its dashboard needs the bridge.");
             warn("Fix this, then run legio pair again.");
         }
-        // The bridge carries the app while it is open. The watcher is what
-        // reaches the phone when it is not.
+    } else if herdr_core::find(&home).is_some() {
+        // herdr-core needs no bridge: the app reads it over SSH.
+        bold("1-3. Looking for Herdr");
+        info("Herdr is not on this machine, but herdr-core is. The app reads it");
+        info("over SSH, so there is no bridge to install.");
+    } else {
+        bold("1-4. Looking for Herdr");
+        info("Herdr is not on this machine, so there is no bridge to install and");
+        info("no agent to watch. The app opens terminals here over SSH.");
+        info("Install Herdr and run legio pair again for the dashboard and notifications.");
+    }
+    // The bridge carries the app while it is open. The watcher is what
+    // reaches the phone when it is not.
+    let watching = watch::agents_here(&home, &socket) && {
         bold("4. Installing the notification watcher");
         match watch::ensure(&home, &socket, true) {
             Ok(_) => true,
@@ -264,12 +278,6 @@ fn setup(args: SetupArgs) -> anyhow::Result<()> {
                 false
             }
         }
-    } else {
-        bold("1-4. Looking for Herdr");
-        info("Herdr is not on this machine, so there is no bridge to install and");
-        info("no agent to watch. The app opens terminals here over SSH.");
-        info("Install Herdr and run legio pair again for the dashboard and notifications.");
-        false
     };
 
     // Before the pairing, not after: a server that will refuse the key is
@@ -678,7 +686,7 @@ fn push_command(command: PushCommand) -> anyhow::Result<()> {
             let home = sys::home()?;
             let socket = watch::installed_socket(&home)
                 .unwrap_or_else(|| home.join(".config/herdr/herdr.sock"));
-            if watch::herdr_here(&home, &socket) {
+            if watch::agents_here(&home, &socket) {
                 watch::ensure(&home, &socket, false)
                     .context("the notification watcher does not run")?;
             }

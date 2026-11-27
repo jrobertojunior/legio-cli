@@ -107,7 +107,9 @@ that is already done is checked, not done again.
 7. Saves the phone's push secret, which came with its key, and sends the
    phone a test notification.
 
-Steps 1 to 4 need Herdr on the machine. Without Herdr, `pair` skips them:
+Steps 1 to 3 need Herdr on the machine. Step 4 needs Herdr or herdr-core.
+A machine with herdr-core and no Herdr gets the watcher and no bridge: the
+app reads herdr-core over SSH. A machine with neither skips steps 1 to 4:
 the app opens terminals over SSH, with no dashboard and no notifications.
 If a step fails, `pair` shows a warning and goes on to the pairing.
 
@@ -163,6 +165,24 @@ snapshots, it sends a push to each phone in
 | --- | --- | --- |
 | `blocked` | "Claude needs input" | time-sensitive |
 | `done` | "Claude finished" | active |
+
+It reads herdr-core, the terminal runtime under the Herdr desktop app, in
+the same way. It keeps one `herdr-core connect` open and asks for
+`terminal.list` every 2 seconds. A machine can have Herdr, herdr-core, or
+both.
+
+- The watcher looks for `herdr-core` on the `PATH`, then in
+  `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, and
+  `/home/linuxbrew/.linuxbrew/bin`.
+- It reads the core only while the core's socket
+  (`~/.local/state/herdr-core/default/default.sock`) is there.
+  `herdr-core connect` starts a core when none runs, and the watcher does
+  not start one that you stopped.
+- `error` sends the same push as `blocked`.
+- A `done` turn that you already saw in the Herdr app sends no push. The
+  Herdr app writes the last turn you saw in the `herdr.seen` label.
+- The push names the terminal by its address (`t7`), which is what the app
+  opens.
 
 Each push also carries the agent status and the work time of the task.
 The watcher times each task, from the moment the agent starts `working` to
